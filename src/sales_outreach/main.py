@@ -10,16 +10,16 @@ load_dotenv()
 
 if __name__ == "__main__":
     # Use Airtable for accessing your leads list
-    lead_loader = AirtableLeadLoader(
-        access_token=os.getenv("AIRTABLE_ACCESS_TOKEN"),
-        base_id=os.getenv("AIRTABLE_BASE_ID"),
-        table_name=os.getenv("AIRTABLE_TABLE_NAME"),
-    )
-    
-    # Use Sheet for accessing your leads list
-    # lead_loader = GoogleSheetLeadLoader(
-    #     spreadsheet_id=os.getenv("SHEET_ID"),
+    # lead_loader = AirtableLeadLoader(
+    #     access_token=os.getenv("AIRTABLE_ACCESS_TOKEN"),
+    #     base_id=os.getenv("AIRTABLE_BASE_ID"),
+    #     table_name=os.getenv("AIRTABLE_TABLE_NAME"),
     # )
+
+    # Use Sheet for accessing your leads list
+    lead_loader = GoogleSheetLeadLoader(
+        spreadsheet_id=os.getenv("SHEET_ID"),
+    )
     
     # Instantiate the OutReachAutomation class
     automation = OutReachAutomation(lead_loader)
