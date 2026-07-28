@@ -91,7 +91,7 @@ The system follows the process to manage lead research and outreach efficiently 
 - Google Gemini API key (or choose other LLM providers like OpenAI or Groq).
 - Google APIs credentials.
 - API keys for integrated tools (RapidAPI, Serper API).
-- API keys and configurations for your chosen CRM (check `.env.example` for more information).
+- API keys and configurations for your chosen CRM (check the repo-root `.env.example` for more information — this app shares one env file with the rest of the monorepo).
 - Necessary Python libraries (listed in `requirements.txt`).
 
 ### Setup
@@ -118,13 +118,7 @@ The system follows the process to manage lead research and outreach efficiently 
 
 4. **Set up environment variables:**
 
-   Create a copy of the `.env.example` file:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-   After running this command, open the new `.env` file and add your API keys as needed.
+   This app shares one `.env` file with the rest of the monorepo, at the repo root (not inside `src/sales_outreach/`). It's found automatically since `load_dotenv()` walks up from this file's directory. See the repo-root `.env.example` for the full list of variables, including the ones this app needs (`SERPER_API_KEY`, `RAPIDAPI_KEY`, `AIRTABLE_*`, `HUBSPOT_API_KEY`, `SHEET_ID`, etc.).
 
 ---
 
