@@ -119,11 +119,11 @@ class Configuration(BaseModel):
     )
     # Model Configuration
     summarization_model: str = Field(
-        default="google_genai:gemini-3.6-flash",
+        default="google_genai:gemini-3.5-flash",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.6-flash",
+                "default": "google_genai:gemini-3.5-flash",
                 "description": "Model for summarizing research results from Tavily search results"
             }
         }
@@ -151,11 +151,11 @@ class Configuration(BaseModel):
         }
     )
     research_model: str = Field(
-        default="google_genai:gemini-3.6-flash",
+        default="google_genai:gemini-3.5-flash",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.6-flash",
+                "default": "google_genai:gemini-3.5-flash",
                 "description": "Model for conducting research. NOTE: Make sure your Researcher Model supports the selected search API."
             }
         }
@@ -171,11 +171,11 @@ class Configuration(BaseModel):
         }
     )
     compression_model: str = Field(
-        default="google_genai:gemini-3.6-flash",
+        default="google_genai:gemini-3.5-flash",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.6-flash",
+                "default": "google_genai:gemini-3.5-flash",
                 "description": "Model for compressing research findings from sub-agents. NOTE: Make sure your Compression Model supports the selected search API."
             }
         }
@@ -191,11 +191,11 @@ class Configuration(BaseModel):
         }
     )
     final_report_model: str = Field(
-        default="google_genai:gemini-3.6-flash",
+        default="google_genai:gemini-3.5-flash",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.6-flash",
+                "default": "google_genai:gemini-3.5-flash",
                 "description": "Model for writing the final report from all research findings"
             }
         }
@@ -207,6 +207,16 @@ class Configuration(BaseModel):
                 "type": "number",
                 "default": 10000,
                 "description": "Maximum output tokens for final report model"
+            }
+        }
+    )
+    fallback_model: str = Field(
+        default="google_genai:gemma-4-31b-it",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "default": "google_genai:gemma-4-31b-it",
+                "description": "Free backup model used when the configured primary model is rate-limited or unavailable"
             }
         }
     )

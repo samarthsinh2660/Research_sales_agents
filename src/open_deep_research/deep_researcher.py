@@ -43,6 +43,7 @@ from open_deep_research.utils import (
     anthropic_websearch_called,
     get_all_tools,
     get_api_key_for_model,
+    get_fallback_model_config,
     get_model_token_limit,
     get_notes_from_tool_calls,
     get_today_str,
@@ -53,8 +54,24 @@ from open_deep_research.utils import (
 )
 
 # Initialize a configurable model that we will use throughout the agent
+# max_retries is capped low so a rate-limited provider fails fast into with_fallbacks()
+# instead of retrying internally for minutes before the fallback ever gets a turn.
+# A default model= is required here (even though every call site overrides it via
+# .with_config()) because LangChain internals sometimes introspect the model
+# (e.g. .get_name() during retry/fallback error handling) before that override lands,
+# and _ConfigurableModel with no default crashes with a confusing TypeError in that path.
 configurable_model = init_chat_model(
+    "google_genai:gemini-3.5-flash",
     configurable_fields=("model", "max_tokens", "api_key"),
+    max_retries=3,
+)
+
+# Free backup model used when the configured primary model is rate-limited or unavailable
+# Kept configurable (via Configuration.fallback_model) rather than hardcoded, same pattern as configurable_model above
+fallback_model = init_chat_model(
+    "google_genai:gemma-4-31b-it",
+    configurable_fields=("model", "max_tokens", "api_key"),
+    max_retries=3,
 )
 
 async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
@@ -91,6 +108,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         .with_structured_output(ClarifyWithUser)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(model_config)
+        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).with_structured_output(ClarifyWithUser)])
     )
     
     # Step 3: Analyze whether clarification is needed
@@ -144,6 +162,7 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         .with_structured_output(ResearchQuestion)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
+        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).with_structured_output(ResearchQuestion)])
     )
     
     # Step 2: Generate structured research brief from user messages
@@ -207,6 +226,7 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
         .bind_tools(lead_researcher_tools)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
+        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).bind_tools(lead_researcher_tools)])
     )
     
     # Step 2: Generate supervisor response based on current context
@@ -408,6 +428,7 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
         .bind_tools(tools)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
+        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).bind_tools(tools)])
     )
     
     # Step 3: Generate researcher response with system context
@@ -529,7 +550,7 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
         "max_tokens": configurable.compression_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.compression_model, config),
         "tags": ["langsmith:nostream"]
-    })
+    }).with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.compression_model_max_tokens))])
     
     # Step 2: Prepare messages for compression
     researcher_messages = state.get("researcher_messages", [])
@@ -647,7 +668,9 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
             )
             
             # Generate the final report
-            final_report = await configurable_model.with_config(writer_model_config).ainvoke([
+            final_report = await configurable_model.with_config(writer_model_config).with_fallbacks(
+                [fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.final_report_model_max_tokens))]
+            ).ainvoke([
                 HumanMessage(content=final_report_prompt)
             ])
             

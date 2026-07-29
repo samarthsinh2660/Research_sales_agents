@@ -82,15 +82,22 @@ async def tavily_search(
     max_char_to_include = configurable.max_content_length
     
     # Initialize summarization model with retry logic
+    # max_retries=3 so a rate-limited provider fails fast into with_fallbacks() instead
+    # of retrying internally for a long time and tripping the 60s summarization timeout
     model_api_key = get_api_key_for_model(configurable.summarization_model, config)
+    fallback_summarization_model = init_chat_model(
+        **get_fallback_model_config(configurable, config, configurable.summarization_model_max_tokens),
+        max_retries=3,
+    ).with_structured_output(Summary)
     summarization_model = init_chat_model(
         model=configurable.summarization_model,
         max_tokens=configurable.summarization_model_max_tokens,
         api_key=model_api_key,
-        tags=["langsmith:nostream"]
+        tags=["langsmith:nostream"],
+        max_retries=3,
     ).with_structured_output(Summary).with_retry(
         stop_after_attempt=configurable.max_structured_output_retries
-    )
+    ).with_fallbacks([fallback_summarization_model])
     
     # Step 4: Create summarization tasks (skip empty content)
     async def noop():
@@ -912,6 +919,15 @@ def get_api_key_for_model(model_name: str, config: RunnableConfig):
         elif model_name.startswith("google"):
             return os.getenv("GOOGLE_API_KEY")
         return None
+
+def get_fallback_model_config(configurable, config: RunnableConfig, max_tokens: int):
+    """Build the .with_config() dict for the fallback model, reusing the primary role's token limit."""
+    return {
+        "model": configurable.fallback_model,
+        "max_tokens": max_tokens,
+        "api_key": get_api_key_for_model(configurable.fallback_model, config),
+        "tags": ["langsmith:nostream"]
+    }
 
 def get_tavily_api_key(config: RunnableConfig):
     """Get Tavily API key from environment or config."""
