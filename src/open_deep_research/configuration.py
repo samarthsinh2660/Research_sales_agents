@@ -221,6 +221,7 @@ class Configuration(BaseModel):
         }
     )
     # MCP server configuration
+    #tells which tools are available to the agent and how to access them
     mcp_config: Optional[MCPConfig] = Field(
         default=None,
         optional=True,
@@ -231,6 +232,7 @@ class Configuration(BaseModel):
             }
         }
     )
+    #tell the agent how to use the tools available to it via the MCP server
     mcp_prompt: Optional[str] = Field(
         default=None,
         optional=True,
