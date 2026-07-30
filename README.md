@@ -6,6 +6,18 @@ Deep research has broken out as one of the most popular agent applications. This
 
 <img width="817" height="666" alt="Screenshot 2025-07-13 at 11 21 12 PM" src="https://github.com/user-attachments/assets/052f2ed3-c664-4a4f-8ec2-074349dcaa3f" />
 
+### 🏔️ This Fork
+
+Built for the PACE Uttarakhand hackathon: a research + outreach agent harness combining this repo (research core) with a merged sales/outreach graph (`src/sales_outreach/`, based on [kaymen99/sales-outreach-automation-langgraph](https://github.com/kaymen99/sales-outreach-automation-langgraph)). Full design doc with architecture diagrams: [`docs/idea.md`](docs/idea.md).
+
+What's been added on top of upstream:
+- **Entity-type layer**: `classify_entity_type` → `build_research_plan` nodes (runs before `write_research_brief`) classify the research subject (company/college/government_dept/person/general) against an extensible registry (`src/open_deep_research/entity_registry.py`) and steer the brief toward the fields that matter for that entity type. Adding a new entity type is one new registry entry, no graph changes.
+- **Subtopic decomposition**: `decompose_subtopics` node forces research breadth (3-5 angles) before the supervisor loop, instead of relying on the model to decide when it has "enough."
+- **Relevance-score filtering**: low-relevance Tavily results are dropped before summarization (tuned against real scores, not assumed).
+- **Citation verification**: `final_report_generation` cross-checks every cited URL against actual research findings before the report ships.
+- **Free-tier fallback model**: every model call falls back to a free Gemini model (`fallback_model` in `configuration.py`) if the primary is rate-limited.
+- **Full gap analysis and rationale**: see `docs/gap-analysis.md`, `docs/gpt-researcher-learnings.md`, `docs/company-research-agent-learnings.md`.
+
 ### 🔥 Recent Updates
 
 **August 14, 2025**: See our free course [here](https://academy.langchain.com/courses/deep-research-with-langgraph) (and course repo [here](https://github.com/langchain-ai/deep_research_from_scratch)) on building open deep research.
@@ -63,10 +75,11 @@ Ask a question in the `messages` input field and click `Submit`. Select differen
 
 Open Deep Research supports a wide range of LLM providers via the [init_chat_model() API](https://python.langchain.com/docs/how_to/chat_models_universal_init/). It uses LLMs for a few different tasks. See the below model fields in the [configuration.py](https://github.com/langchain-ai/open_deep_research/blob/main/src/open_deep_research/configuration.py) file for more details. This can be accessed via the LangGraph Studio UI. 
 
-- **Summarization** (default: `openai:gpt-4.1-mini`): Summarizes search API results
-- **Research** (default: `openai:gpt-4.1`): Power the search agent
-- **Compression** (default: `openai:gpt-4.1`): Compresses research findings
-- **Final Report Model** (default: `openai:gpt-4.1`): Write the final report
+- **Summarization** (default: `google_genai:gemini-3.5-flash`): Summarizes search API results
+- **Research** (default: `google_genai:gemini-3.5-flash`): Power the search agent
+- **Compression** (default: `google_genai:gemini-3.5-flash`): Compresses research findings
+- **Final Report Model** (default: `google_genai:gemini-3.5-flash`): Write the final report
+- **Fallback Model** (default: `google_genai:gemma-4-31b-it`): Free-tier model used for every role above if the primary is rate-limited or unavailable
 
 > Note: the selected model will need to support [structured outputs](https://python.langchain.com/docs/integrations/chat/) and [tool calling](https://python.langchain.com/docs/how_to/tool_calling/).
 

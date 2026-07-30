@@ -22,6 +22,12 @@ Research splits into categories, each category splits into source-specific modul
 - `org_research` → google (shared), gov_source (Uttarakhand-specific), news (shared), website
 - `problem_research` → gov_source (shared), existing_solutions, news (shared)
 
+## Entity-type layer — **implemented and verified**
+
+Built as: `entity_registry.py` (plain Python dict, resolves the registry-format question below), `classify_entity_type` + `build_research_plan` nodes in `deep_researcher.py`, wired exactly as diagrammed below. Verified with live model calls across all 4 types: "Uttarakhand Forest Department" → `government_dept`, "IIT Roorkee" → `college`, "Satya Nadella" → `person`, "OpsHub company" → `company` — each correctly classified and produced entity-specific guidance fed into the brief. `company`'s targets were aligned to `company-research-agent`'s proven 4-category split (company/industry/financial/news) rather than invented from scratch.
+
+Not yet built: dedicated per-entity tool modules (LinkedIn, gov_source) - this layer currently steers the *existing* generic search toward the right targets; it doesn't add new search sources yet.
+
 ## Entity-type layer (the new piece)
 Gap: a college and a company both hit `google_module` + `gov_source_module`, but need *different fields* — a college needs accreditation/placement/registrar contact, a company needs revenue/decision-maker/industry. So classification isn't enough; each entity type needs its own **target schema** telling each module what to actually look for.
 
@@ -139,4 +145,4 @@ government_dept:
 
 ## Open questions / not yet decided
 - Exact repo layout (monorepo structure) — not scaffolded yet, was intentionally deferred until architecture was agreed
-- Where the Entity Schema Registry configs live (yaml files vs. Python dict vs. DB) — leaning config file for easy non-engineer edits later
+- ~~Where the Entity Schema Registry configs live~~ — **decided**: plain Python dict (`entity_registry.py`), fastest to build; portable to YAML later if a non-engineer needs to edit it directly
