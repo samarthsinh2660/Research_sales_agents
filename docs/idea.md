@@ -27,6 +27,8 @@ Gap: a college and a company both hit `google_module` + `gov_source_module`, but
 
 New nodes: `classify_entity_type` → looks up an **Entity Schema Registry** (plain config, not code) → `build_research_plan` (per-module target fields for this entity) → feeds the existing `research_supervisor`.
 
+`classify_entity_type` runs right after `clarify_with_user`, before `write_research_brief` — by then the subject is settled (clarification is done), and classifying first lets the brief itself be entity-aware (a `government_dept` brief asks for budget/schemes/org structure, a `company` brief asks for funding/product/market) instead of writing a generic brief and only specializing afterward.
+
 Adding a new entity type later (NGO, research institute, etc.) = one new block in the registry config. No graph or module changes required — that's the scalability point.
 
 ## Full architecture
@@ -34,14 +36,14 @@ Adding a new entity type later (NGO, research institute, etc.) = one new block i
 ```mermaid
 flowchart TD
     START([START]) --> clarify[clarify_with_user]
-    clarify --> brief[write_research_brief]
-
-    brief --> classify[classify_entity_type<br/>NEW: college? company? gov dept? person?]
+    clarify --> classify[classify_entity_type<br/>NEW: college? company? gov dept? person?]
     classify --> registry[(Entity Schema Registry<br/>extensible config, keyed by entity type)]
 
     registry --> plan[build_research_plan<br/>NEW: per-module target fields for this entity type]
 
-    plan --> supervisor[research_supervisor]
+    plan --> brief[write_research_brief<br/>entity-aware]
+    brief --> subtopics[decompose_subtopics<br/>NEW: 3-5 research angles, GPT-Researcher-style]
+    subtopics --> supervisor[research_supervisor]
 
     subgraph modules[" "]
         direction LR
@@ -79,13 +81,33 @@ flowchart TD
     classDef kaymen fill:#fef3c7,stroke:#d97706,color:#78350f;
     classDef mod fill:#dcfce7,stroke:#16a34a,color:#14532d;
 
-    class classify,registry,plan newlayer;
+    class classify,registry,plan,subtopics newlayer;
     class clarify,brief,supervisor,compress,report odr;
     class score,qualified,outreach,crm,save kaymen;
     class linkedin,google,youtube,gov,profile mod;
 ```
 
 Legend: blue = from `open_deep_research`, yellow = from `kaymen99` sales repo, green = shared modules/objects, pink = new entity-type layer we're adding.
+
+`decompose_subtopics` isn't part of the entity-type layer — it's a GPT-Researcher-derived efficiency improvement (forces breadth before delegating to the supervisor) landing first, ahead of the entity-type work below.
+
+## Entity/module structure — how classification feeds modules
+
+```mermaid
+flowchart TD
+    A[User request] --> B[clarify_with_user]
+    B --> C[classify_entity_type]
+    C --> D{Entity Schema Registry}
+    D -->|company| E1[modules: company, industry, financial, news]
+    D -->|government_dept| E2[modules: budget, schemes, org_structure, gov_source]
+    D -->|college| E3[modules: academics, admissions, placements, accreditation]
+    D -->|person| E4[modules: profile, affiliation, linkedin, news]
+    E1 & E2 & E3 & E4 --> F["write_research_brief (entity-aware)"]
+    F --> G[supervisor]
+    G --> H["researcher (uses get_all_tools + entity modules)"]
+    H --> I[compress_research]
+    I --> J[final_report_generation]
+```
 
 ## Entity Schema Registry — example shape
 

@@ -76,6 +76,22 @@ Guidelines:
 - If the query is in a specific language, prioritize sources published in that language.
 """
 
+decompose_subtopics_prompt = """You are a research planner. Your job is to break down a research brief into a small number of distinct, non-overlapping research angles so that the researchers who follow can deliberately cover breadth, rather than stopping early.
+
+<Research Brief>
+{research_brief}
+</Research Brief>
+
+Today's date is {date}.
+
+Generate between 3 and 5 subtopics that, together, would allow a comprehensive answer to the research brief. Each subtopic should be:
+- Distinct from the others (no significant overlap)
+- Specific enough to hand directly to a researcher as a standalone task
+- Genuinely necessary for a comprehensive answer (do not pad the list to hit a number)
+
+If the research brief is narrow enough that it doesn't meaningfully split into multiple angles (e.g. a single simple fact lookup), return fewer subtopics — as few as 1 — rather than inventing artificial ones.
+"""
+
 lead_researcher_prompt = """You are a research supervisor. Your job is to conduct research by calling the "ConductResearch" tool. For context, today's date is {date}.
 
 <Task>

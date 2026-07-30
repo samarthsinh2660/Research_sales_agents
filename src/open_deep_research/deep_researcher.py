@@ -23,6 +23,7 @@ from open_deep_research.prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
     compress_research_system_prompt,
+    decompose_subtopics_prompt,
     final_report_generation_prompt,
     lead_researcher_prompt,
     research_system_prompt,
@@ -37,6 +38,7 @@ from open_deep_research.state import (
     ResearcherOutputState,
     ResearcherState,
     ResearchQuestion,
+    Subtopics,
     SupervisorState,
 )
 from open_deep_research.utils import (
@@ -50,7 +52,9 @@ from open_deep_research.utils import (
     is_token_limit_exceeded,
     openai_websearch_called,
     remove_up_to_last_ai_message,
+    extract_answer_text,
     think_tool,
+    verify_citations,
 )
 
 # Initialize a configurable model that we will use throughout the agent
@@ -133,7 +137,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         )
 
 
-async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["research_supervisor"]]:
+async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["decompose_subtopics"]]:
     """Transform user messages into a structured research brief and initialize supervisor.
     
     This function analyzes the user's messages and generates a focused research brief
@@ -180,7 +184,7 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     )
     
     return Command(
-        goto="research_supervisor", 
+        goto="decompose_subtopics",
         update={
             "research_brief": response.research_brief,
             "supervisor_messages": {
@@ -191,6 +195,55 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
                 ]
             }
         }
+    )
+
+
+async def decompose_subtopics(state: AgentState, config: RunnableConfig) -> Command[Literal["research_supervisor"]]:
+    """Break the research brief into a small number of explicit research angles.
+
+    Forces breadth by generating subtopics up front (GPT-Researcher-style), rather than
+    relying solely on the supervisor to decide when it has "enough" coverage.
+
+    Args:
+        state: Current agent state containing the research brief
+        config: Runtime configuration with model settings
+
+    Returns:
+        Command to proceed to research supervisor with subtopics appended to its context
+    """
+    # Step 1: Set up the research model for structured subtopic generation
+    configurable = Configuration.from_runnable_config(config)
+    research_model_config = {
+        "model": configurable.research_model,
+        "max_tokens": configurable.research_model_max_tokens,
+        "api_key": get_api_key_for_model(configurable.research_model, config),
+        "tags": ["langsmith:nostream"]
+    }
+
+    subtopics_model = (
+        configurable_model
+        .with_structured_output(Subtopics)
+        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        .with_config(research_model_config)
+        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).with_structured_output(Subtopics)])
+    )
+
+    # Step 2: Generate subtopics from the research brief
+    prompt_content = decompose_subtopics_prompt.format(
+        research_brief=state.get("research_brief", ""),
+        date=get_today_str()
+    )
+    response = await subtopics_model.ainvoke([HumanMessage(content=prompt_content)])
+
+    # Step 3: Append subtopics to the supervisor's context as a follow-up human message
+    subtopics_message = (
+        "To ensure comprehensive coverage, consider delegating research along these angles:\n"
+        + "\n".join(f"- {subtopic}" for subtopic in response.subtopics)
+    )
+
+    return Command(
+        goto="research_supervisor",
+        update={"supervisor_messages": [HumanMessage(content=subtopics_message)]}
     )
 
 
@@ -573,13 +626,13 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
             
             # Extract raw notes from all tool and AI messages
             raw_notes_content = "\n".join([
-                str(message.content) 
+                extract_answer_text(message.content)
                 for message in filter_messages(researcher_messages, include_types=["tool", "ai"])
             ])
-            
+
             # Return successful compression result
             return {
-                "compressed_research": str(response.content),
+                "compressed_research": extract_answer_text(response.content),
                 "raw_notes": [raw_notes_content]
             }
             
@@ -596,7 +649,7 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
     
     # Step 4: Return error result if all attempts failed
     raw_notes_content = "\n".join([
-        str(message.content) 
+        extract_answer_text(message.content)
         for message in filter_messages(researcher_messages, include_types=["tool", "ai"])
     ])
     
@@ -674,9 +727,12 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
                 HumanMessage(content=final_report_prompt)
             ])
             
-            # Return successful report generation
+            # Return successful report generation, dropping any citation the writer
+            # model hallucinated (a URL cited but never actually present in findings)
+            report_text = extract_answer_text(final_report.content)
+            verified_report_content = verify_citations(report_text, findings)
             return {
-                "final_report": final_report.content, 
+                "final_report": verified_report_content,
                 "messages": [final_report],
                 **cleared_state
             }
@@ -730,6 +786,7 @@ deep_researcher_builder = StateGraph(
 # Add main workflow nodes for the complete research process
 deep_researcher_builder.add_node("clarify_with_user", clarify_with_user)           # User clarification phase
 deep_researcher_builder.add_node("write_research_brief", write_research_brief)     # Research planning phase
+deep_researcher_builder.add_node("decompose_subtopics", decompose_subtopics)       # Subtopic decomposition phase
 deep_researcher_builder.add_node("research_supervisor", supervisor_subgraph)       # Research execution phase
 deep_researcher_builder.add_node("final_report_generation", final_report_generation)  # Report generation phase
 

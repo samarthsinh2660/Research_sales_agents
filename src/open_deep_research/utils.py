@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import warnings
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Dict, List, Literal, Optional
@@ -74,10 +75,19 @@ async def tavily_search(
             url = result['url']
             if url not in unique_results:
                 unique_results[url] = {**result, "query": response['query']}
-    
+
     # Step 3: Set up the summarization model with configuration
     configurable = Configuration.from_runnable_config(config)
-    
+
+    # Step 3b: Drop low-relevance results (Tavily's own score) before spending model
+    # calls summarizing them. Falls back to the unfiltered set if filtering would
+    # remove everything, so a narrow/niche query never ends up with zero results.
+    relevant_results = {
+        url: result for url, result in unique_results.items()
+        if result.get("score", 1.0) >= configurable.relevance_threshold
+    }
+    unique_results = relevant_results or unique_results
+
     # Character limit to stay within model token limits (configurable)
     max_char_to_include = configurable.max_content_length
     
@@ -99,23 +109,20 @@ async def tavily_search(
         stop_after_attempt=configurable.max_structured_output_retries
     ).with_fallbacks([fallback_summarization_model])
     
-    # Step 4: Create summarization tasks (skip empty content)
-    async def noop():
-        """No-op function for results without raw content."""
-        return None
-    
-    summarization_tasks = [
-        noop() if not result.get("raw_content") 
-        else summarize_webpage(
-            summarization_model, 
-            result['raw_content'][:max_char_to_include]
-        )
-        for result in unique_results.values()
-    ]
-    
-    # Step 5: Execute all summarization tasks in parallel
-    summaries = await asyncio.gather(*summarization_tasks)
-    
+    # Step 4 & 5: Summarize results one at a time (not in parallel) so a single search
+    # step (which can have 7-8 results) doesn't burst past Gemini free tier's
+    # 5-requests-per-minute limit on both the primary and fallback model at once.
+    summaries = []
+    for result in unique_results.values():
+        if not result.get("raw_content"):
+            summaries.append(None)
+        else:
+            summary = await summarize_webpage(
+                summarization_model,
+                result['raw_content'][:max_char_to_include]
+            )
+            summaries.append(summary)
+
     # Step 6: Combine results with their summaries
     summarized_results = {
         url: {
@@ -871,6 +878,79 @@ def remove_up_to_last_ai_message(messages: list[MessageLikeRepresentation]) -> l
     
     # No AI messages found, return original list
     return messages
+
+##########################
+# Citation Verification Utils
+##########################
+
+def extract_answer_text(content) -> str:
+    """Extract the final answer text from a model response's content.
+
+    Some providers (e.g. Gemini in thinking mode) return content as a list of typed
+    blocks (a 'thinking' block plus a 'text' block) instead of a plain string. This
+    pulls out just the actual answer, skipping any reasoning/thinking blocks.
+
+    Args:
+        content: A message's .content, either a plain string or a list of blocks
+
+    Returns:
+        The plain-text answer
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_blocks = [
+            block.get("text", "") for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        if text_blocks:
+            return "".join(text_blocks)
+        # No explicit 'text' blocks found (e.g. a provider without typed blocks) -
+        # join whatever text content exists rather than falling through to the raw list
+        return "".join(
+            block if isinstance(block, str) else str(block.get("text", block))
+            for block in content
+        )
+    return str(content)
+
+def verify_citations(report_content: str, findings: str) -> str:
+    """Strip citation lines from a report's Sources section whose URL doesn't
+    actually appear in the research findings, catching writer-model hallucinated
+    citations without a second model call.
+
+    Args:
+        report_content: The generated final report, including its Sources section
+        findings: The raw research findings the report was generated from
+
+    Returns:
+        The report with any unverifiable citation lines removed
+    """
+    findings_urls = set(re.findall(r'https?://\S+', findings))
+    lines = report_content.split("\n")
+    verified_lines = []
+    total_citations = 0
+    dropped_citations = 0
+    for line in lines:
+        match = re.match(r"^\s*\[\d+\].*?(https?://\S+)", line)
+        if match:
+            total_citations += 1
+            cited_url = match.group(1).rstrip(').,\'"')
+            if cited_url not in findings_urls:
+                dropped_citations += 1
+                continue
+        verified_lines.append(line)
+
+    # A silent mass-strip (e.g. from corrupted findings text) is worse than a few
+    # legitimately hallucinated citations getting caught - surface it loudly instead
+    # of letting the report ship with an empty Sources section unexplained.
+    if total_citations > 0 and dropped_citations / total_citations > 0.5:
+        logging.warning(
+            f"verify_citations dropped {dropped_citations}/{total_citations} citations "
+            "(>50%) - this usually means the findings text passed in is corrupted "
+            "rather than that the writer model hallucinated most of its sources."
+        )
+
+    return "\n".join(verified_lines)
 
 ##########################
 # Misc Utils

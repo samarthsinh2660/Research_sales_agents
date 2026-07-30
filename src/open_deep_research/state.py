@@ -42,9 +42,16 @@ class ClarifyWithUser(BaseModel):
 
 class ResearchQuestion(BaseModel):
     """Research question and brief for guiding research."""
-    
+
     research_brief: str = Field(
         description="A research question that will be used to guide the research.",
+    )
+
+class Subtopics(BaseModel):
+    """A small set of distinct research angles to ensure comprehensive coverage of a research brief."""
+
+    subtopics: list[str] = Field(
+        description="3-5 distinct, non-overlapping research angles covering the research brief. Fewer (as low as 1) if the brief is too narrow to meaningfully split.",
     )
 
 

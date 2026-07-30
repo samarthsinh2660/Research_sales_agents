@@ -4,15 +4,17 @@ Direct answer: **no.** What's in `gpt-researcher-learnings.md` and `company-rese
 
 ## If we implement everything from both learnings docs
 
-| Change | Effect |
-|---|---|
-| Multi-retriever aggregation | More sources per report (closer to GPT-Researcher's 20+ vs. our 4) |
-| Subtopic decomposition | Forced breadth instead of trusting the model to stop early |
-| Relevance-score filtering | Less noise reaching summarization, fewer wasted model calls |
-| `tavily.crawl()` for known URLs | Richer extraction when we already know where to look |
-| Citation/publish step | More reliable, verifiable sourcing in the final report |
+| Change | Effect | Status |
+|---|---|---|
+| Subtopic decomposition | Forced breadth instead of trusting the model to stop early | **Done** — new `decompose_subtopics` node, verified via before/after test (OpsHub: 4 sources → 14, more diverse product/partnership coverage) |
+| Relevance-score filtering | Less noise reaching summarization, fewer wasted model calls | **Done** — threshold tuned to 0.2 (not 0.4) after checking real Tavily scores; 0.4 was silently cutting legitimate third-party sources like G2 |
+| Citation/publish step | More reliable, verifiable sourcing in the final report | **Done** — `verify_citations` cross-checks every cited URL against real findings; also found and fixed 2 pre-existing bugs where Gemini's "thinking mode" content (list-of-blocks, not a string) was getting corrupted by raw `str()` calls in `compress_research` and `final_report_generation`, which had been silently poisoning findings/citations this whole session |
+| Multi-retriever aggregation | More sources per report (closer to GPT-Researcher's 20+ vs. our 4) | Not started — blocked on a Google Custom Search Engine ID (`cx`), have the API key |
+| `tavily.crawl()` for known URLs | Richer extraction when we already know where to look | Not started |
 
 **Net result: we become roughly as good as the two tools we studied, at generic web research.** That's a real, useful floor to reach — but it's not the mission. Pranav's own framing was explicit: *"we cannot build a better generic researcher than Google Deep Research, but we can build a better government policy researcher, and an even better Uttarakhand government policy researcher."* None of the above touches that at all.
+
+**Also newly confirmed, not from the learnings docs: reports have no contact information.** Even a good report (14 verified sources) names zero people — no decision-maker, no email, no LinkedIn profile. The sales/outreach agent has nothing to send an email *to*. This is exactly the `people_research`/`linkedin` module gap in item 3 below, and it's more urgent than it looked before we actually generated a report and checked — deliberately deferred for now, revisit before the outreach side is wired up.
 
 ## What's still 0% built, and matters more than anything on the list above
 

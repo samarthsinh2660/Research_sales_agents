@@ -150,6 +150,19 @@ class Configuration(BaseModel):
             }
         }
     )
+    relevance_threshold: float = Field(
+        default=0.2,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "slider",
+                "default": 0.2,
+                "min": 0.0,
+                "max": 1.0,
+                "step": 0.05,
+                "description": "Minimum Tavily relevance score for a search result to be summarized. Lower-scoring results are dropped before reaching the summarization model. Kept low (0.2) because Tavily scores relevance to literal query wording, not source authority — legitimate third-party sources (e.g. G2, PeerSpot review pages) commonly score 0.3-0.45 and would be wrongly cut at a higher threshold like 0.4."
+            }
+        }
+    )
     research_model: str = Field(
         default="google_genai:gemini-3.5-flash",
         metadata={
