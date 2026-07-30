@@ -47,6 +47,16 @@ class ResearchQuestion(BaseModel):
         description="A research question that will be used to guide the research.",
     )
 
+class EntityClassification(BaseModel):
+    """Classification of what kind of subject a research request is about."""
+
+    entity_type: str = Field(
+        description="The type of entity being researched: 'company', 'college', 'government_dept', 'person', or 'general' if none of those clearly apply.",
+    )
+    reasoning: str = Field(
+        description="Brief reasoning for why this entity type was chosen.",
+    )
+
 class Subtopics(BaseModel):
     """A small set of distinct research angles to ensure comprehensive coverage of a research brief."""
 
@@ -74,6 +84,8 @@ class AgentState(MessagesState):
     
     supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
     research_brief: Optional[str]
+    entity_type: Optional[str]
+    entity_guidance: Optional[str]
     raw_notes: Annotated[list[str], override_reducer] = []
     notes: Annotated[list[str], override_reducer] = []
     final_report: str

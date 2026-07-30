@@ -41,7 +41,25 @@ For the verification message when no clarification is needed:
 """
 
 
-transform_messages_into_research_topic_prompt = """You will be given a set of messages that have been exchanged so far between yourself and the user. 
+classify_entity_type_prompt = """You will be given a set of messages exchanged so far between yourself and the user about a research request.
+
+<Messages>
+{messages}
+</Messages>
+
+Today's date is {date}.
+
+Classify what kind of subject this research request is about, so the research can be steered toward the fields that actually matter for that kind of subject. Choose exactly one of:
+- **company**: a business, startup, or commercial organization
+- **college**: an educational institution (college, university, school)
+- **government_dept**: a government department, ministry, agency, or public-sector body
+- **person**: an individual person
+- **general**: none of the above clearly applies (a topic, a problem, a product category, etc.)
+
+If the request is ambiguous or could plausibly be more than one type, pick the single best fit rather than guessing wildly - "general" is a safe default when truly unclear.
+"""
+
+transform_messages_into_research_topic_prompt = """You will be given a set of messages that have been exchanged so far between yourself and the user.
 Your job is to translate these messages into a more detailed and concrete research question that will be used to guide the research.
 
 The messages that have been exchanged so far between yourself and the user are:
@@ -50,6 +68,8 @@ The messages that have been exchanged so far between yourself and the user are:
 </Messages>
 
 Today's date is {date}.
+
+{entity_guidance}
 
 You will return a single research question that will be used to guide the research.
 

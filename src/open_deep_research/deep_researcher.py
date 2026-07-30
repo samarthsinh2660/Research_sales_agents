@@ -19,8 +19,10 @@ from langgraph.types import Command
 from open_deep_research.configuration import (
     Configuration,
 )
+from open_deep_research.entity_registry import DEFAULT_ENTITY_TYPE, get_entity_targets
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
+    classify_entity_type_prompt,
     compress_research_simple_human_message,
     compress_research_system_prompt,
     decompose_subtopics_prompt,
@@ -34,6 +36,7 @@ from open_deep_research.state import (
     AgentState,
     ClarifyWithUser,
     ConductResearch,
+    EntityClassification,
     ResearchComplete,
     ResearcherOutputState,
     ResearcherState,
@@ -78,7 +81,7 @@ fallback_model = init_chat_model(
     max_retries=3,
 )
 
-async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
+async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["classify_entity_type", "__end__"]]:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
     
     This function determines whether the user's request needs clarification before proceeding
@@ -95,7 +98,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
     configurable = Configuration.from_runnable_config(config)
     if not configurable.allow_clarification:
         # Skip clarification step and proceed directly to research
-        return Command(goto="write_research_brief")
+        return Command(goto="classify_entity_type")
     
     # Step 2: Prepare the model for structured clarification analysis
     messages = state["messages"]
@@ -132,9 +135,82 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
     else:
         # Proceed to research with verification message
         return Command(
-            goto="write_research_brief", 
+            goto="classify_entity_type",
             update={"messages": [AIMessage(content=response.verification)]}
         )
+
+
+async def classify_entity_type(state: AgentState, config: RunnableConfig) -> Command[Literal["build_research_plan"]]:
+    """Classify what kind of subject this research request is about.
+
+    Runs after clarification is settled, before the research brief is written, so the
+    brief itself can be steered toward the fields that matter for this entity type
+    (e.g. a government_dept brief asks about budget/schemes, a company brief asks
+    about revenue/decision-makers) instead of writing a generic brief first.
+
+    Args:
+        state: Current agent state containing user messages
+        config: Runtime configuration with model settings
+
+    Returns:
+        Command to proceed to build_research_plan with the classified entity type
+    """
+    configurable = Configuration.from_runnable_config(config)
+    research_model_config = {
+        "model": configurable.research_model,
+        "max_tokens": configurable.research_model_max_tokens,
+        "api_key": get_api_key_for_model(configurable.research_model, config),
+        "tags": ["langsmith:nostream"]
+    }
+
+    classification_model = (
+        configurable_model
+        .with_structured_output(EntityClassification)
+        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        .with_config(research_model_config)
+        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).with_structured_output(EntityClassification)])
+    )
+
+    prompt_content = classify_entity_type_prompt.format(
+        messages=get_buffer_string(state.get("messages", [])),
+        date=get_today_str()
+    )
+    try:
+        response = await classification_model.ainvoke([HumanMessage(content=prompt_content)])
+        entity_type = response.entity_type
+    except Exception:
+        entity_type = DEFAULT_ENTITY_TYPE
+
+    return Command(
+        goto="build_research_plan",
+        update={"entity_type": entity_type}
+    )
+
+
+async def build_research_plan(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief"]]:
+    """Look up the Entity Schema Registry for this entity type and pass its target
+    fields through to write_research_brief, so the brief asks for what actually
+    matters for this kind of subject rather than generic coverage.
+
+    Args:
+        state: Current agent state containing the classified entity type
+        config: Runtime configuration (unused, kept for node signature consistency)
+
+    Returns:
+        Command to proceed to write_research_brief with entity guidance in state
+    """
+    entity_type = state.get("entity_type") or DEFAULT_ENTITY_TYPE
+    targets = get_entity_targets(entity_type)
+    entity_guidance = (
+        f"This research is about a **{entity_type}**. Make sure the research brief "
+        f"explicitly asks about these fields, in addition to anything the user specified:\n"
+        + "\n".join(f"- {target}" for target in targets)
+    )
+
+    return Command(
+        goto="write_research_brief",
+        update={"entity_guidance": entity_guidance}
+    )
 
 
 async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["decompose_subtopics"]]:
@@ -172,7 +248,8 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     # Step 2: Generate structured research brief from user messages
     prompt_content = transform_messages_into_research_topic_prompt.format(
         messages=get_buffer_string(state.get("messages", [])),
-        date=get_today_str()
+        date=get_today_str(),
+        entity_guidance=state.get("entity_guidance") or ""
     )
     response = await research_model.ainvoke([HumanMessage(content=prompt_content)])
     
@@ -785,6 +862,8 @@ deep_researcher_builder = StateGraph(
 
 # Add main workflow nodes for the complete research process
 deep_researcher_builder.add_node("clarify_with_user", clarify_with_user)           # User clarification phase
+deep_researcher_builder.add_node("classify_entity_type", classify_entity_type)     # Entity classification phase
+deep_researcher_builder.add_node("build_research_plan", build_research_plan)       # Entity-aware research planning phase
 deep_researcher_builder.add_node("write_research_brief", write_research_brief)     # Research planning phase
 deep_researcher_builder.add_node("decompose_subtopics", decompose_subtopics)       # Subtopic decomposition phase
 deep_researcher_builder.add_node("research_supervisor", supervisor_subgraph)       # Research execution phase
