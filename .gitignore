@@ -31,6 +31,10 @@ env/
 ENV/
 .env
 
+# Google OAuth credentials/tokens (sales_outreach Gmail/Sheets/Docs/Drive access)
+credentials.json
+token.json
+
 # IDE specific files
 .idea/
 .vscode/
