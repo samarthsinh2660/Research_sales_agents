@@ -1,7 +1,10 @@
+import logging
 import os
+
 import hubspot
-from hubspot.crm.contacts import SimplePublicObjectInput, ApiException
-from .lead_loader_base import LeadLoaderBase
+from hubspot.crm.contacts import ApiException, SimplePublicObjectInput
+
+from sales_outreach.tools.leads_loader.lead_loader_base import LeadLoaderBase
 
 HUBSPOT_CONTACTS_PROPERTIES = ["email", "firstname", "lastname", "hs_lead_status", "address", "phone"]
 
@@ -11,8 +14,7 @@ class HubSpotLeadLoader(LeadLoaderBase):
         self.client = hubspot.Client.create(access_token=access_token or os.getenv("HUBSPOT_API_KEY"))
 
     def fetch_records(self, lead_ids=None, status_filter="NEW"):
-        """
-        Fetches leads from HubSpot. If lead IDs are provided, fetch those specific records.
+        """Fetches leads from HubSpot. If lead IDs are provided, fetch those specific records.
         Otherwise, fetch leads matching the given status.
         """
         try:
@@ -45,7 +47,7 @@ class HubSpotLeadLoader(LeadLoaderBase):
                         records.append(lead)
                 return records
         except ApiException as e:
-            print(f"Error fetching records from HubSpot: {e}")
+            logging.error(f"Error fetching records from HubSpot: {e}")
             return []
 
     def update_record(self, lead_id, fields_to_update):
@@ -60,6 +62,6 @@ class HubSpotLeadLoader(LeadLoaderBase):
             )
             return {"lead_id": lead_id, "updated_fields": fields_to_update}
         except ApiException as e:
-            print(f"Error updating HubSpot record: {e}")
+            logging.error(f"Error updating HubSpot record: {e}")
             return None
 

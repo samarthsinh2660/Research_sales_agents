@@ -1,7 +1,9 @@
 {
     "dockerfile_lines": [],
     "graphs": {
-      "Deep Researcher": "./src/open_deep_research/deep_researcher.py:deep_researcher"
+      "Unified Agent": "./src/agent/graph.py:unified_agent",
+      "Deep Researcher": "./src/open_deep_research/deep_researcher.py:deep_researcher",
+      "Sales Outreach": "./src/sales_outreach/outreach_automation.py:outreach_automation"
     },
     "python_version": "3.11",
     "env": "./.env",

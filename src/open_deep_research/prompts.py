@@ -184,7 +184,7 @@ You can use any of the tools provided to you to find resources that can help ans
 <Available Tools>
 You have access to these main tools:
 1. **tavily_search**: For conducting web searches to gather general information. When the research brief calls for recent news, announcements, or press (e.g. "recent news," "recent announcements or public press," "expansion/contraction signals"), set topic="news" on this call instead of the default "general" - it returns far more relevant, recent results for those targets.
-2. **website_contact_finder**: For finding named people and contact information (email, role), recent blog content, and linked social media profiles (Twitter/X, LinkedIn, YouTube, Facebook, Instagram) by crawling an organization's own website - use this once you know the organization's official URL and the research brief calls for a contact, blog activity, or social presence. Do not use it for generic fact-finding - use tavily_search for that.
+2. **website_contact_finder**: For finding named people and contact information (email, role), recent blog content, and linked social media profiles (Twitter/X, LinkedIn, YouTube, Facebook, Instagram) by crawling an organization's own website. **When the brief asks for contacts and you were not given a URL, first find the official site with tavily_search, then crawl it with this tool** - published email addresses almost always live on a contact or team page, not in generic search results, so skipping this step is the usual reason a report ends up with no email. Do not use it for generic fact-finding - use tavily_search for that.
 3. **linkedin_search**: For structured data on a specific person or company's LinkedIn page - only available when a LinkedIn scraping account is configured. Requires an actual LinkedIn URL; find it with tavily_search first if you don't have one. Use deliberately for a specific known profile/company, not as a general search tool.
 4. **youtube_search**: For a person's or organization's YouTube channel - description, subscriber count, and recent video titles/descriptions. Only available when configured. Useful for finding what someone is currently, publicly focused on (a specific recent talk, project, or topic) to personalize outreach with real, current detail instead of generic claims.
 5. **think_tool**: For reflection and strategic planning during research
@@ -292,7 +292,11 @@ Please create a detailed answer to the overall research brief that:
 2. Includes specific facts and insights from the research
 3. References relevant sources using [Title](URL) format
 4. Provides a balanced, thorough analysis. Be as comprehensive as possible, and include all information that is relevant to the overall research question. People are using you for deep research and will expect detailed, comprehensive answers.
-5. If the research brief is about an organization (company, college, government department, etc.), include a "Key Contacts" section listing any named people, roles, and contact information (email, contact page) found in the research - even if only one, and clearly note "No named contact found" if the research genuinely turned up none rather than omitting the section
+5. If the research brief is about an organization or a person, include a "Key Contacts" section. For each named person give their role, and then the best reachable route found, labelled explicitly:
+   - **Email:** only if an actual address appeared in a source. Never guess or construct one from a name pattern - a fabricated address is worse than none, because it silently fails or reaches a stranger. If none was found, write "Email: not published".
+   - **LinkedIn:** the profile URL, when found. This is the expected fallback when no email is published, so always include it if available.
+   - **Other:** contact page or role inbox (partnerships@, info@) when those are all that exist.
+   Close the section with a one-line "Best route:" naming the single most actionable way to reach this organization. If the research genuinely found no named person, write "No named contact found" rather than omitting the section.
 6. Includes a "Sources" section at the end with all referenced links
 
 You can structure your report in a number of different ways. Here are some examples:

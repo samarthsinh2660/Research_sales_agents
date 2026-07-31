@@ -1,7 +1,11 @@
 import base64
-from googleapiclient.discovery import build
+import logging
 from email.mime.text import MIMEText
-from src.utils import get_google_credentials
+
+from googleapiclient.discovery import build
+
+from sales_outreach.utils import get_google_credentials
+
 
 class GmailTools:
     def __init__(self):
@@ -15,10 +19,10 @@ class GmailTools:
                     'raw': self._encode_message(message)
                 }
             }).execute()
-            print(f"Draft created for email for {recipient} with subject '{subject}'")
+            logging.info(f"Draft created for email for {recipient} with subject '{subject}'")
             return draft
         except Exception as error:
-            print(f"An error occurred while creating draft: {error}")
+            logging.error(f"An error occurred while creating draft: {error}")
             return None
         
     def send_email(self, recipient, subject, email_content):
@@ -27,10 +31,10 @@ class GmailTools:
             sent_message = self.service.users().messages().send(userId='me', body={
                 'raw': self._encode_message(message)
             }).execute()
-            print(f"Email sent to {recipient} with subject '{subject}'")
+            logging.info(f"Email sent to {recipient} with subject '{subject}'")
             return sent_message
         except Exception as error:
-            print(f"An error occurred while sending reply: {error}")
+            logging.error(f"An error occurred while sending reply: {error}")
             return None
 
     def _create_message(self, recipient, subject, text):

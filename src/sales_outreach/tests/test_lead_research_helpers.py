@@ -1,5 +1,5 @@
 """Unit tests for lead_research.py's pure helpers - no API calls."""
-from src.tools.lead_research import extract_company_name
+from sales_outreach.tools.lead_research import extract_company_name
 
 
 def test_extracts_domain_from_email():

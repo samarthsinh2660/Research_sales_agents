@@ -1,98 +1,130 @@
-# Detailed Automation Workflow 
+# System Workflow
 
-This system processes leads to qualify them, gather information, generate reports, and prepare outreach materials. Below is the detailed workflow:
+How the sales outreach graph actually works today, node by node. For the wider project
+architecture see [`docs/idea.md`](../../../docs/idea.md); for the planned unification with
+research see [`docs/unified-agent-design.md`](../../../docs/unified-agent-design.md).
 
----
+All research is delegated to the shared `open_deep_research` core. This graph owns only the
+sales-specific work.
 
-### **1. Fetch New Leads**
-- **Function:** `get_new_leads`
-- Retrieves a batch of new leads to process from the chosen CRM.
+## What this system is selling
 
----
+Outreach pitches **PACE Uttarakhand** — a 90-day open-innovation programme that connects real
+problems from Uttarakhand's departments, institutions and companies with builder teams who
+produce working, evidence-backed solutions. Companies are approached for one of three partner
+tracks:
 
-### **2. Check for Remaining Leads**
-- **Function:** `check_for_remaining_leads`
-- After receiving the lead from the CRM database, we verify if there are new lead to process:
-  - **If leads are found:** Proceed to fetch data.
-  - **If no more leads:** Exit the workflow.
+- **Technology Partner** — cloud credits, APIs, tools, or engineering support for builders
+- **Hiring Partner** — consent-based access to builders evaluated on demonstrated work
+- **Challenge / Pilot Partner** — bring a real operational problem, get multiple independently
+  built solutions, with a possible route to a pilot
 
----
+This description lives once in `prompts.py` as `PACE_UTTARAKHAND_CONTEXT` and is shared by the
+scoring, report, email and call-script prompts, so the pitch cannot drift between them.
 
-### **3. Fetch LinkedIn Profile Data**
-- **Function:** `fetch_linkedin_profile_data`
-- Uses RapidAPI to scrape LinkedIn profile information for the current lead and its associated company.
+## Flow
 
----
+```mermaid
+flowchart TD
+    A[get_new_leads] --> B{check_for_remaining_leads}
+    B -->|none left| E([END])
+    B -->|next lead| C[run_shared_research]
+    C --> D{check_research_sufficiency}
+    D -->|retry once, gap-focused| C
+    D -->|still insufficient| S[save_reports_to_google_docs]
+    D -->|sufficient| F[score_lead]
+    F -->|below threshold| S
+    F -->|qualified| G[generate_custom_outreach_report]
+    G --> H[generate_personalized_email]
+    G --> I[generate_interview_script]
+    H --> S
+    I --> S
+    S --> J[update_CRM]
+    J --> B
+```
 
-### **4. Review Company Website**
-- **Function:** `review_company_website`
-- After scraping the company LinkedIn profile we get their website link, which we will crawl to gather relevant information about their mission, products, services, and any blog or social media links.
+## Nodes
 
----
+**`get_new_leads`** — loads leads from the source named by `lead_loader_type`
+(Google Sheets / Airtable / HubSpot). The loader is built lazily from config, so the graph
+itself takes no constructor arguments and can be exposed directly in `langgraph.json`.
 
-### **5. Collect Company Information**
-Gather comprehensive data on the company’s digital presence, including an analysis of blog content, recent news, and social media activity, all processed in parallel to optimize workflow efficiency.
-- **Function:** `analyze_blog_content`
-  - Analyzes the company's blog to identify major topics, trends, and areas for improvement in content strategy. The analysis includes assessing the frequency of posts, relevancy to the company's services, and activity consistency.
-- **Function:** `analyze_recent_news`
-  - Scrapes recent news articles related to the company, focusing on key developments such as product launches, partnerships, acquisitions, and other significant events that impact the business.
-- **Function:** `analyze_social_media_content`
-  - Reviews the company’s social media activity across platforms like Facebook, Twitter, and YouTube. This analysis looks at engagement metrics (likes, shares, comments) and the alignment of posts with the company’s brand and services. The goal is to identify successful strategies and areas for improvement in social media outreach.
+**`check_for_remaining_leads`** — loop head. Pops the next lead and returns the shortened
+queue in the state update rather than mutating state in place, which would be lost under a
+checkpointer.
 
----
+**`run_shared_research`** — calls the `open_deep_research` graph, twice when a lead name is
+known: once for the person (role, background, LinkedIn) and once for their company. The
+parent config is merged rather than replaced so runtime model and search settings reach the
+research core. On a retry, the query is steered at the specific gap the sufficiency check
+identified instead of repeating the same request.
 
-### **6. Generate Digital Presence Report**
-- **Function:** `generate_digital_presence_report`
-- Consolidates insights from blog content, news articles, and social media analyses into a detailed and actionable digital presence report. This comprehensive report evaluates the company’s performance across multiple platforms and provides targeted recommendations for improving online engagement and branding.
-  - **Executive Summary:** An overview of the company’s digital presence, highlighting strengths, weaknesses, and opportunities.
-  - **Platform-Specific Analysis:** Detailed evaluations of each platform (blog, Facebook, Twitter, YouTube), including performance metrics, trends, and actionable improvements.
-  - **Recent News Summary:** A review of significant company news and its impact on the company’s digital presence.
-  - **Overall Recommendations:** A set of strategic, tailored actions to enhance the company’s digital engagement and alignment with branding goals.
+**`check_research_sufficiency`** — the quality gate. Judges whether the research has enough
+real substance to write a credible pitch. This exists to prevent both failure modes at either
+extreme: duplicating research work here, and generating a weak, generic email from thin data.
+One gap-focused retry is allowed (`max_research_retries`), then the lead is flagged
+`NEEDS_MORE_RESEARCH` rather than pitched to.
 
----
+**`score_lead`** — scores partnership fit against the three tracks. Qualification is recorded
+explicitly in state, not inferred later from whether a Google Docs link exists — that
+inference mislabels qualified leads whenever Docs saving is off.
 
-### **7. Generate Global Lead Research Report**
-- **Function:** `generate_full_lead_research_report`
-- Combines detailed analysis of lead profiles, company information, and digital presence data into a comprehensive report designed to support lead qualification, engagement strategies, and brand positioning.
-  - **I. Lead Profile:** An in-depth overview of the lead’s professional background, role, career history, and areas of expertise.
-  - **II. Company Overview:** A detailed description of the company, including its industry, size, mission, products/services, and market position.
-  - **III. Engagement History:** 
-    - **Recent News:** Key updates on the company’s recent activities, such as product launches or funding developments, and their impact on the company’s strategy.
-    - **Social Media and Blog Activity:** A thorough evaluation of the company’s digital presence across blogs and social media platforms, including performance metrics and recommendations for improvement.
+**`generate_custom_outreach_report`** — writes and proofreads the outreach report, then fans
+out to both material generators in parallel.
 
----
+**`generate_personalized_email`** — writes the email and creates a **Gmail draft**. Sending is
+gated behind `send_email_directly`, which defaults off so a bad generation can never
+auto-send to a real prospect.
 
-### **8. Lead Qualification**
-- **Function:** `score_lead`
-This process involves evaluating the lead’s company profile, digital presence, marketing efforts, and potential for AI-driven growth, scoring them on various criteria like blog activity, social media engagement, and use of automation. Leads that score highly on these criteria are deemed qualified for further engagement.
-  - **If the lead is qualified:** Proceed with detailed outreach preparation, based on the lead’s alignment with ElevateAI’s services and potential to benefit from AI-driven marketing solutions.
-  - **If the lead is not qualified:** Move to step 10 directly.
+**`generate_interview_script`** — SPIN questions plus a partnership call script.
 
----
+**`save_reports_to_google_docs`** — the fan-in point for both generators, and the persistence
+step. Reports always save locally; Google Docs only when `save_to_google_docs` is on.
 
-### **9. For Qualified Leads**
-1. **Generate Custom Outreach Report**
-   - **Function:** `generate_custom_outreach_report`
-   - Creates a tailored outreach report based on the lead's company challenges, opportunities, and goals, as identified in the provided research report and case study. The report will highlight how ElevateAI’s AI-driven solutions can address their specific challenges and showcase the measurable results achieved with similar businesses.
+**`update_CRM`** — writes status, score and links back, then resets every per-lead field.
+Status reflects where the lead actually stopped: `NEEDS_MORE_RESEARCH`, `NOT_QUALIFIED`, or
+`ATTEMPTED_TO_CONTACT`.
 
-2. **Generate Personalized Email**
-   - **Function:** `generate_personalized_email`
-   - Develops a personalized cold outreach email aimed at capturing the lead’s interest and encouraging them to schedule a call. The email includes a link to the outreach report and emphasizes how ElevateAI’s solutions align with their business needs, addressing key pain points and demonstrating tangible improvements.
-   - The automation has access to the GMAIL API if you want to send the generated email directly to the lead. If you disable this option, the email will be saved into Google Docs alongside the other reports.
+## Routing
 
-3. **Generate Interview Script**
-   - **Function:** `generate_interview_script`
-   - Prepares a compelling, conversational interview script based on SPIN selling principles, company details, and lead summaries. The script is designed to engage marketing and sales professionals by asking thoughtful questions that explore the lead’s challenges, objectives, and how ElevateAI can provide valuable solutions. 
+There are no `add_conditional_edges`. Every node returns `Command(goto=...)`, matching
+`open_deep_research`. The only declared edge is `START → get_new_leads`.
 
----
+Fan-out and fan-in both work through `Command`: `generate_custom_outreach_report` returns a
+list of targets, and both generators return the same next node. LangGraph's per-node trigger
+channels tolerate multiple writes in one superstep, so the join runs exactly once.
 
-### **10. Save Reports Locally and to Google Docs**
-   - **Function:** `save_reports_to_google_docs(reports, lead)`
-   - Saves all generated documents locally to the `reports` folder and into a shared Google Drive folder.
+## State reset between leads
 
-### **11. Update CRM**
-   - **Function:** `update_crm`
-   - Updates the lead's status and generated documents in the CRM system.
+The graph reuses one state object across leads, so **every per-lead field must be reset in
+`update_CRM`**. Reports use an `override_reducer` because a plain `add` reducer cannot be
+cleared by assignment — that previously leaked one lead's reports into the next lead's prompts
+and documents. A test enumerates the state fields and fails if a new one is added without a
+reset.
 
-### End of Workflow
-- The system loops back to check for additional leads in Step 2 until no more leads remain. Once all leads are processed, the automation terminates.
+## Configuration
+
+Everything behavioural lives in `SalesConfiguration` (`configuration.py`), resolved from
+environment variables first, then the runtime `configurable` dict, then defaults. Field names
+are prefixed where they would otherwise collide with the research core's config, since both
+resolve from the same environment namespace.
+
+## Reaching this pipeline through the unified agent
+
+This graph remains runnable on its own (batch over a lead sheet, via `main.py` or the
+**Sales Outreach** entry in Studio). The same sales work is also reachable through the
+**Unified Agent** (`src/agent/`), which adds a layer in front:
+
+- The **prompt** names the subject — one company, a pasted Google Sheet link, an inline list
+  of names, or an event/listing page URL to extract organizations and people from
+- The **`intent` config** decides how deep to go: `research` → `qualify` → `draft` → `send`,
+  each running the same pipeline and stopping deeper
+
+Two differences worth knowing when running through the unified agent:
+
+- **CRM write-back only happens for sheet-sourced targets.** An inline-typed name or a name
+  scraped from a page has no row to update.
+- **Sending pauses for approval** by default (`require_send_approval`), rather than relying on
+  the `send_email_directly` flag used by this graph directly.
+
+See [`docs/unified-agent-design.md`](../../../docs/unified-agent-design.md).

@@ -1,7 +1,10 @@
-from googleapiclient.errors import HttpError
+import logging
+
 from googleapiclient.discovery import build
-from .lead_loader_base import LeadLoaderBase
-from src.utils import get_google_credentials
+from googleapiclient.errors import HttpError
+
+from sales_outreach.tools.leads_loader.lead_loader_base import LeadLoaderBase
+from sales_outreach.utils import get_google_credentials
 
 
 class GoogleSheetLeadLoader(LeadLoaderBase):
@@ -11,8 +14,7 @@ class GoogleSheetLeadLoader(LeadLoaderBase):
         self.sheet_name = sheet_name or self._get_sheet_name_from_id()
         
     def fetch_records(self, lead_ids=None, status_filter="NEW"):
-        """
-        Fetches leads from Google Sheets. If lead IDs are provided, fetch those specific records.
+        """Fetches leads from Google Sheets. If lead IDs are provided, fetch those specific records.
         Otherwise, fetch leads matching the given status.
         """
         try:
@@ -37,7 +39,7 @@ class GoogleSheetLeadLoader(LeadLoaderBase):
                     
             return records
         except HttpError as e:
-            print(f"Error fetching records from Google Sheets: {e}")
+            logging.error(f"Error fetching records from Google Sheets: {e}")
             return []
 
     def update_record(self, id, fields_to_update):
@@ -70,7 +72,7 @@ class GoogleSheetLeadLoader(LeadLoaderBase):
                 ).execute()
             return {"id": id, "updated_fields": fields_to_update}
         except HttpError as e:
-            print(f"Error updating Google Sheets record: {e}")
+            logging.error(f"Error updating Google Sheets record: {e}")
             return None
 
     def _get_sheet_name_from_id(self):
@@ -81,5 +83,5 @@ class GoogleSheetLeadLoader(LeadLoaderBase):
                 raise ValueError("No sheets found in the spreadsheet.")
             return sheets[0]["properties"]["title"]  # Default to the first sheet
         except HttpError as e:
-            print(f"Error fetching sheet name: {e}")
+            logging.error(f"Error fetching sheet name: {e}")
             raise

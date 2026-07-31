@@ -1,6 +1,5 @@
 def extract_company_name(email):
-    """
-    Extracts the company name from a professional email address.
+    """Extracts the company name from a professional email address.
     """
     try:
         # Split the email to get the domain part

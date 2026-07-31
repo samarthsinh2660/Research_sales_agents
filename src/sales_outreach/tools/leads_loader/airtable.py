@@ -1,6 +1,8 @@
 from pyairtable import Table
 from pyairtable.formulas import match
-from .lead_loader_base import LeadLoaderBase
+
+from sales_outreach.tools.leads_loader.lead_loader_base import LeadLoaderBase
+
 
 class AirtableLeadLoader(LeadLoaderBase):
     def __init__(self, access_token, base_id, table_name):
@@ -8,8 +10,7 @@ class AirtableLeadLoader(LeadLoaderBase):
         self.table = Table(access_token, base_id, table_name)
 
     def fetch_records(self, lead_ids=None, status_filter="NEW"):
-        """
-        Fetches leads from Airtable. If lead IDs are provided, fetch those specific records.
+        """Fetches leads from Airtable. If lead IDs are provided, fetch those specific records.
         Otherwise, fetch leads matching the given status.
         """
         if lead_ids:
@@ -31,8 +32,7 @@ class AirtableLeadLoader(LeadLoaderBase):
             ]
 
     def update_record(self, lead_id, updates: dict):
-        """
-        Updates a record in Airtable, adding new fields dynamically if they don't exist.
+        """Updates a record in Airtable, adding new fields dynamically if they don't exist.
 
         Args:
             lead_id (str): The ID of the record to update.

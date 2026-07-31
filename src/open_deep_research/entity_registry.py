@@ -20,6 +20,13 @@ ENTITY_REGISTRY: dict[str, dict] = {
             "news: recent press, leadership changes, expansion/contraction signals",
             "company's own website and blog content: recent posts, product updates, thought leadership, stated focus areas",
             "decision makers and company size",
+            (
+                "reachable contact routes, in priority order: a published email address "
+                "(a named person's, or a role inbox such as partnerships@/info@/sales@ from "
+                "the company's own contact page), then LinkedIn profile URLs for named "
+                "decision makers, then the contact page URL. Report only addresses actually "
+                "found in a source - never guess or construct one from a name pattern."
+            ),
         ],
     },
     "college": {

@@ -1,7 +1,12 @@
-import os, re
+import logging
+import os
+import re
+
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from src.utils import get_google_credentials
+
+from sales_outreach.utils import get_google_credentials
+
 
 class GoogleDocsManager:
     def __init__(self):
@@ -9,8 +14,7 @@ class GoogleDocsManager:
         self.drive_service = build('drive', 'v3', credentials=get_google_credentials())
 
     def add_document(self, content, doc_title, folder_name, make_shareable=False, folder_shareable=False, markdown=False):
-        """
-        Create a Google Document and save it in the specified folder.
+        """Create a Google Document and save it in the specified folder.
         """
         try:
             # Ensure the folder exists
@@ -49,12 +53,11 @@ class GoogleDocsManager:
                 "folder_url": folder_url
             }
         except Exception as e:
-            print(f"An error occurred: {e}")
+            logging.error(f"An error occurred: {e}")
             return None
 
     def get_document(self, doc_url):
-        """
-        Retrieve the content of a Google Document by its URL.
+        """Retrieve the content of a Google Document by its URL.
         """
         try:
             # Extract the document ID from the URL
@@ -73,12 +76,11 @@ class GoogleDocsManager:
 
             return content
         except Exception as e:
-            print(f"An error occurred: {e}")
+            logging.error(f"An error occurred: {e}")
             return None
         
     def _get_or_create_folder(self, folder_name, make_shareable=False):
-        """
-        Get the ID and link of an existing folder with the specified name, or create one if it doesn't exist.
+        """Get the ID and link of an existing folder with the specified name, or create one if it doesn't exist.
         """
         try:
             # Search for the folder
@@ -111,7 +113,7 @@ class GoogleDocsManager:
 
             return folder_id, folder_link
         except Exception as e:
-            print(f"An error occurred while retrieving or creating the folder: {e}")
+            logging.error(f"An error occurred while retrieving or creating the folder: {e}")
             return None, None
 
     def _make_document_shareable(self, doc_id):
@@ -125,7 +127,7 @@ class GoogleDocsManager:
             file_info = self.drive_service.files().get(fileId=doc_id, fields="webViewLink").execute()
             return file_info.get("webViewLink")
         except Exception as e:
-            print(f"Failed to make document shareable: {e}")
+            logging.error(f"Failed to make document shareable: {e}")
             return None
 
     def _convert_markdown_to_google_doc(self, markdown_content, title):
@@ -146,5 +148,5 @@ class GoogleDocsManager:
 
             return file.get("id")
         except Exception as e:
-            print(f"Failed to convert Markdown to Google Doc: {e}")
+            logging.error(f"Failed to convert Markdown to Google Doc: {e}")
             return None
