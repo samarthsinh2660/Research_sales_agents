@@ -1,0 +1,49 @@
+# Company Profile: Shital Infotech
+
+## Company Overview
+Established in 2004, Shital Infotech has evolved from a small-scale computer repair business into a comprehensive IT solutions provider [1, 2]. Over its 22-year tenure, the company has positioned itself as a key technology partner for industrial clients, particularly in the manufacturing and pharmaceutical sectors. Their growth trajectory reflects the broader shift in the digital landscape, moving from hardware maintenance for legacy systems to supporting modern cloud infrastructures and custom software development [1]. 
+
+The company is guided by four core values:
+*   **Reliability:** Providing consistent, dependable performance.
+*   **Relationships:** Prioritizing partnership over transactional interactions.
+*   **Honesty:** Ensuring transparent pricing and communication.
+*   **Accountability:** Taking full ownership of deployed solutions [1, 2].
+
+## Core Services and Operational Focus
+Shital Infotech divides its operations into two main pillars: traditional IT infrastructure support and a newly established software development division.
+
+### IT Infrastructure & Maintenance
+The company provides 24/7 technical support for business continuity. Core hardware and maintenance offerings include:
+*   **Hardware Sales & Repair:** Supplying essential components such as SSDs, RAM, and GPUs.
+*   **Server Management:** Maintenance and support for both Windows and Linux-based server environments.
+*   **Security Infrastructure:** Installation and maintenance of CCTV and physical security systems.
+*   **General IT Maintenance:** Providing routine maintenance to ensure factory operations remain uninterrupted [1, 2].
+
+### Software Solutions
+The software division focuses on creating tailored applications to address specific business challenges, particularly within regulated industries. Key features of their software products include:
+*   **Inventory Management Systems:** Multi-tenant SaaS platforms featuring real-time stock tracking, invoice management, and role-based access control. Their systems are built with data isolation protocols to ensure that each factory maintains its own secure database [1].
+*   **Payroll & HR Management:** Web applications designed with hard-coded compliance for Indian statutory requirements, including PF (Provident Fund), ESIC (Employee State Insurance Corporation), PT (Professional Tax), and TDS (Tax Deducted at Source) [1].
+
+## Industry Position and Market Landscape
+Shital Infotech operates primarily within the Indian manufacturing and pharmaceutical ecosystems. By serving over 20 factories, they have carved out a niche as a specialized provider for high-stakes environments where uptime is critical [1, 5]. 
+
+The firm distinguishes itself from general IT service providers by offering industry-specific compliance features in its software products. As the Indian pharmaceutical industry is projected to reach US$ 130 billion by 2030, the demand for IT partners capable of managing both physical infrastructure and digital statutory compliance has increased, providing a favorable growth signal for the company [6]. 
+
+It is important to note that Shital Infotech is a distinct entity from other similarly named organizations, such as "Sheetal Infotech Private Limited" (based in Nagpur/Mumbai) and various "Shital Industries" involved in chemical manufacturing [2, 3].
+
+## Financial and Business Model
+The company operates on a consultative business model rather than a standardized, public pricing structure. They emphasize a partnership-based approach, offering custom scoping and project estimation free of charge [1]. Their primary revenue mechanism involves:
+*   **Annual Maintenance Contracts (AMC):** Providing recurring support to ensure 24/7 operational stability for clients.
+*   **Tailored Software Development:** Engaging with clients to build custom tools that solve specific operational workflows.
+
+## Key Contacts
+*   **Named Personnel:** No specific individuals (CEO, Founder, or Manager) are explicitly named on the official website or public company profiles. While the company refers to their "founder" in narrative content, no biographical details or contact information for leadership are disclosed [1, 3].
+*   **Contact Information:** Interested parties are directed to use the "Get a Quote" contact form available on their official website. There are no direct email addresses or phone numbers provided for specific personnel [1].
+
+### Sources
+[1] Shital Infotech | Trusted IT Solutions Since 2004: https://www.shitalinfotech.com
+[2] About Us | Shital Infotech: https://shitalinfotech.com/about
+[3] Shital Infotech LinkedIn Profile: https://www.linkedin.com/company/shital-infotech-2004/about
+[4] SHITAL INFOTECH Company Profile | Ahmedabad, Gujarat: https://www.dnb.com/business-directory/company-profiles.shital_infotech.7bbb5e704812d082ff58dc368919e1c1.html
+[5] Shital Infotech (Home Page): https://www.shitalinfotech.com
+[6] Indian Pharmacy: Pharma Companies in India | IBEF: https://www.ibef.org/industry/pharmaceutical-india

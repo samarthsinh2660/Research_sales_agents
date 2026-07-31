@@ -1,15 +1,10 @@
 from colorama import Fore, Style
-from .tools.base.markdown_scraper_tool import scrape_website_to_markdown
-from .tools.base.search_tools import get_recent_news
 from .tools.base.gmail_tools import GmailTools
 from .tools.google_docs_tools import GoogleDocsManager
-from .tools.lead_research import research_lead_on_linkedin
-from .tools.company_research import research_lead_company, generate_company_profile
-from .tools.youtube_tools import get_youtube_stats
-from .tools.rag_tool import fetch_similar_case_study
+from .tools.lead_research import extract_company_name
 from .prompts import *
 from .state import LeadData, CompanyData, Report, GraphInputState, GraphState
-from .structured_outputs import WebsiteData, EmailResponse
+from .structured_outputs import EmailResponse, ResearchSufficiency
 from .utils import invoke_llm, get_report, get_current_date, save_reports_locally
 
 # Enable or disable sending emails directly using GMAIL
@@ -39,7 +34,9 @@ class OutReachAutomationNodes:
                 email=lead.get("Email", ""),
                 phone=lead.get("Phone", ""),
                 address=lead.get("Address", ""),
-                profile="" # will be constructed
+                profile="", # will be constructed
+                company_name=lead.get("Company Name", ""),
+                company_website=lead.get("Company Website", ""),
             )
             for lead in raw_leads
         ]
@@ -68,273 +65,114 @@ class OutReachAutomationNodes:
             print(Fore.GREEN + "----- Finished, No more leads -----\n" + Style.RESET_ALL)
             return "No more leads"
 
-    def fetch_linkedin_profile_data(self, state: GraphState):
-        print(Fore.YELLOW + "----- Searching Lead data on LinkedIn -----\n" + Style.RESET_ALL)
-        lead_data = state["current_lead"]
-        company_data = state.get("company_data", CompanyData())
-        
-        # Scrape lead linkedin profile
-        (
-            lead_profile, 
-            company_name, 
-            company_website,
-            company_linkedin_url
-        ) = research_lead_on_linkedin(lead_data.name, lead_data.email)
-        lead_data.profile = lead_profile
+    async def run_shared_research(self, state: GraphState):
+        """Research the lead (person, if named) and their company using the shared
+        open_deep_research core (entity-aware, fallback model, citation verification,
+        contact-finder module) instead of kaymen99's original LinkedIn/SERPER-based
+        pipeline - which needed RAPIDAPI/SERPER keys that were never configured in this
+        project and never actually worked.
 
-        # Research company on linkedin
-        company_profile = research_lead_company(company_linkedin_url)
-        
-        # Update company name from LinkedIn data
+        Runs two research passes when a real lead name is known - one for the person
+        (role, background, LinkedIn) and one for their company (what they do, size,
+        financials) - matching the old pipeline's fetch_linkedin_profile_data (person)
+        + review_company_website (company) split, just via the shared core instead of
+        two separate broken tool sets.
+        """
+        print(Fore.YELLOW + "----- Running shared research core -----\n" + Style.RESET_ALL)
+        from langchain_core.messages import HumanMessage as ODRHumanMessage
+        from open_deep_research.deep_researcher import deep_researcher
+
+        lead_data = state["current_lead"]
+        company_name = lead_data.company_name or extract_company_name(lead_data.email)
+        company_website = lead_data.company_website
+        person_name = lead_data.name.strip()
+
+        # If this is a retry after an insufficient-data verdict, steer both passes
+        # explicitly at what was missing instead of repeating the same queries
+        research_gaps = state.get("research_gaps", "")
+        retry_count = state.get("research_retry_count", 0)
+        gap_instruction = ""
+        if research_gaps:
+            gap_instruction = f" A previous research pass found this gap - focus specifically on filling it this time: {research_gaps}"
+            retry_count += 1
+
+        queries = []
+        if person_name:
+            person_query = f"Research {person_name}, who works at {company_name}."
+            if lead_data.email:
+                person_query += f" Contact email: {lead_data.email}."
+            person_query += " Find their current role, professional background, and public LinkedIn profile."
+            queries.append(("Person", person_query + gap_instruction))
+
+        company_query = f"Research {company_name}"
+        if company_website:
+            company_query += f" ({company_website})"
+        company_query += " - what they do, services/products offered, company size, and any named contacts or contact information."
+        queries.append(("Company", company_query + gap_instruction))
+
+        report_sections = []
+        for label, query in queries:
+            result = await deep_researcher.ainvoke(
+                {"messages": [ODRHumanMessage(content=query)]},
+                config={"configurable": {"allow_clarification": False}}
+            )
+            report_sections.append(f"## {label} Research\n\n{result.get('final_report', '')}")
+
+        research_report = "\n\n---\n\n".join(report_sections)
+
+        company_data = state.get("company_data") or CompanyData()
         company_data.name = company_name
         company_data.website = company_website
-        company_data.profile = str(company_profile)
-            
+
         # Update folder name for saving reports in Drive
-        self.drive_folder_name = f"{lead_data.name}_{company_data.name}"
-        
+        self.drive_folder_name = f"{lead_data.name}_{company_data.name}".strip("_")
+
+        report = Report(
+            title="General Lead Research Report",
+            content=research_report,
+            is_markdown=True
+        )
         return {
             "current_lead": lead_data,
             "company_data": company_data,
-            "reports": []
+            "reports": [report],
+            "research_retry_count": retry_count
         }
-    
-    def review_company_website(self, state: GraphState):
-        print(Fore.YELLOW + "----- Scraping company website -----\n" + Style.RESET_ALL)
-        lead_data = state.get("current_lead")
-        company_data = state.get("company_data")
-        
-        company_website = company_data.website
-        if company_website:
-            # Scrape company website
-            content = scrape_website_to_markdown(company_website)
-            website_info = invoke_llm(
-                system_prompt=WEBSITE_ANALYSIS_PROMPT.format(main_url=company_website), 
-                user_message=content,
-                model="gemini-1.5-flash",
-                response_format=WebsiteData
-            )
 
-            # Extract all relevant links
-            company_data.social_media_links.blog = website_info.blog_url
-            company_data.social_media_links.facebook = website_info.facebook
-            company_data.social_media_links.twitter = website_info.twitter
-            company_data.social_media_links.youtube = website_info.youtube
-            
-            # Update company profile with website summary
-            company_data.profile = generate_company_profile(company_data.profile, website_info.summary)
-                 
-        inputs = f"""
-        # **Lead Profile:**
-
-        {lead_data.profile}
-
-        # **Company Information:**
-
-        {company_data.profile}
-        """
-        
-        # Generate general lead search report
-        general_lead_search_report = invoke_llm(
-            system_prompt=LEAD_SEARCH_REPORT_PROMPT, 
-            user_message=inputs,
-            model="gemini-1.5-flash"
-        )
-        
-        lead_search_report = Report(
-            title="General Lead Research Report",
-            content=general_lead_search_report,
-            is_markdown=True
-        )
-        
-        return {
-            "company_data": company_data,
-            "reports": [lead_search_report]
-        }
-    
     @staticmethod
-    def collect_company_information(state: GraphState):
-        return {"reports": []}
-    
-    def analyze_blog_content(self, state: GraphState):
-        print(Fore.YELLOW + "----- Analyzing company main blog -----\n" + Style.RESET_ALL)  
-        blog_analysis_report = ""
-        
-        # Check if company has a blog
-        company_data = state["company_data"]
-        blog_url = company_data.social_media_links.blog
-        if blog_url:
-            blog_content = scrape_website_to_markdown(blog_url)
-            prompt = BLOG_ANALYSIS_PROMPT.format(company_name=company_data.name)
-            blog_analysis_report = invoke_llm(
-                system_prompt=prompt, 
-                user_message=blog_content,
-                model="gemini-1.5-flash"
-            )
-            blog_analysis_report = Report(
-                title="Blog Analysis Report",
-                content=blog_analysis_report,
-                is_markdown=True
-            )
-        return {"reports": [blog_analysis_report]}
-    
-    def analyze_social_media_content(self, state: GraphState):
-        print(Fore.YELLOW + "----- Analyzing company social media accounts -----\n" + Style.RESET_ALL)
-        
-        # Load states
-        company_data = state["company_data"]
-        
-        # Get social media urls
-        facebook_url = company_data.social_media_links.facebook
-        twitter_url = company_data.social_media_links.twitter
-        youtube_url = company_data.social_media_links.youtube
-        
-        # Check If company has Youtube channel
-        if youtube_url:
-            youtube_data = get_youtube_stats(youtube_url)
-            prompt = YOUTUBE_ANALYSIS_PROMPT.format(company_name=company_data.name)
-            youtube_insight = invoke_llm(
-                system_prompt=prompt, 
-                user_message=youtube_data,
-                model="gemini-1.5-flash"
-            )
-            youtube_analysis_report = Report(
-                title="Youtube Analysis Report",
-                content=youtube_insight,
-                is_markdown=True
-            )
-            
-        # Check If company has Facebook account
-        if facebook_url:
-            # TODO Add Facebook analysis part
-            pass
-        
-        # Check If company has Twitter account
-        if twitter_url:
-            # TODO Add Twitter analysis part
-            pass
-        
+    def check_research_sufficiency(state: GraphState):
+        """Check whether the research report has enough real substance for a credible
+        pitch, instead of either duplicating research or generating a weak, generic
+        email from thin data.
+        """
+        print(Fore.YELLOW + "----- Checking research sufficiency -----\n" + Style.RESET_ALL)
+        reports = state["reports"]
+        research_report = get_report(reports, "General Lead Research Report")
+
+        result = invoke_llm(
+            system_prompt=CHECK_RESEARCH_SUFFICIENCY_PROMPT,
+            user_message=research_report,
+            model="gemini-3.1-flash-lite",
+            response_format=ResearchSufficiency
+        )
+
+        if not result.sufficient:
+            print(Fore.RED + f"----- Research insufficient: {result.gaps} -----\n" + Style.RESET_ALL)
+
         return {
-            "company_data": company_data,
-            "reports": [youtube_analysis_report]
+            "research_sufficient": result.sufficient,
+            "research_gaps": result.gaps
         }
-    
-    def analyze_recent_news(self, state: GraphState):
-        print(Fore.YELLOW + "----- Analyzing recent news about company -----\n" + Style.RESET_ALL)
-        
-        # Load states
-        company_data = state["company_data"]
-        
-        # Fetch recent news using serper API
-        recent_news = get_recent_news(company=company_data.name)
-        number_months = 6
-        current_date = get_current_date()
-        news_analysis_prompt = NEWS_ANALYSIS_PROMPT.format(
-            company_name=company_data.name, 
-            number_months=number_months, 
-            date=current_date
-        )
-        
-        # Craft news analysis prompt
-        news_insight = invoke_llm(
-            system_prompt=news_analysis_prompt, 
-            user_message=recent_news,
-            model="gemini-1.5-flash"
-        )
-        
-        news_analysis_report = Report(
-            title="News Analysis Report",
-            content=news_insight,
-            is_markdown=True
-        )
-        return {"reports": [news_analysis_report]}
-    
-    def generate_digital_presence_report(self, state: GraphState):
-        print(Fore.YELLOW + "----- Generate Digital presence analysis report -----\n" + Style.RESET_ALL)
-        
-        # Load reports
-        reports = state["reports"]
-        blog_analysis_report = get_report(reports, "Blog Analysis Report")
-        facebook_analysis_report = get_report(reports, "Facebook Analysis Report")
-        twitter_analysis_report = get_report(reports, "Twitter Analysis Report")
-        youtube_analysis_report = get_report(reports, "Youtube Analysis Report")
-        news_analysis_report = get_report(reports, "News Analysis Report")
-        
-        inputs = f"""
-        # **Digital Presence Data:**
-        ## **Blog Information:**
 
-        {blog_analysis_report}
-        
-        ## **Facebook Information:**
+    @staticmethod
+    def check_if_research_sufficient(state: GraphState):
+        if state.get("research_sufficient"):
+            return "sufficient"
+        # One retry with a gap-focused query before giving up - not unlimited retries
+        if state.get("research_retry_count", 0) < 1:
+            return "retry"
+        return "insufficient"
 
-        {facebook_analysis_report}
-        
-        ## **Twitter Information:**
-
-        {twitter_analysis_report}
-
-        ## **Youtube Information:**
-
-        {youtube_analysis_report}
-
-        # **Recent News:**
-
-        {news_analysis_report}
-        """
-        
-        prompt = DIGITAL_PRESENCE_REPORT_PROMPT.format(
-            company_name=state["company_data"].name, date=get_current_date()
-        )
-        digital_presence_report = invoke_llm(
-            system_prompt=prompt, 
-            user_message=inputs,
-            model="gemini-1.5-flash"
-        ) 
-        
-        digital_presence_report = Report(
-            title="Digital Presence Report",
-            content=digital_presence_report,
-            is_markdown=True
-        )
-        return {"reports": [digital_presence_report]}
-    
-    def generate_full_lead_research_report(self, state: GraphState):
-        print(Fore.YELLOW + "----- Generate global lead analysis report -----\n" + Style.RESET_ALL)
-        
-        # Load reports
-        reports = state["reports"]
-        general_lead_search_report = get_report(reports, "General Lead Research Report")
-        digital_presence_report = get_report(reports, "Digital Presence Report")
-        
-        inputs = f"""
-        # **Lead & company Information:**
-
-        {general_lead_search_report}
-        
-        ---
-
-        # **Digital Presence Information:**
-
-        {digital_presence_report}
-        """
-        
-        prompt = GLOBAL_LEAD_RESEARCH_REPORT_PROMPT.format(
-            company_name=state["company_data"].name, date=get_current_date()
-        )
-        full_report = invoke_llm(
-            system_prompt=prompt, 
-            user_message=inputs,
-            model="gemini-1.5-flash"
-        )
-        
-        global_research_report = Report(
-            title="Global Lead Analysis Report",
-            content=full_report,
-            is_markdown=True
-        )
-        return {"reports": [global_research_report]}
-    
     @staticmethod
     def score_lead(state: GraphState):
         """
@@ -347,13 +185,13 @@ class OutReachAutomationNodes:
         
         # Load reports
         reports = state["reports"]
-        global_research_report = get_report(reports, "Global Lead Analysis Report")
-        
+        research_report = get_report(reports, "General Lead Research Report")
+
         # Scoring lead
         lead_score = invoke_llm(
             system_prompt=SCORE_LEAD_PROMPT,
-            user_message=global_research_report,
-            model="gemini-1.5-pro"
+            user_message=research_report,
+            model="gemini-3.1-flash-lite"
         )
         return {"lead_score": lead_score.strip()}
 
@@ -395,50 +233,26 @@ class OutReachAutomationNodes:
         
         # Load reports
         reports = state["reports"]
-        general_lead_search_report = get_report(reports, "General Lead Research Report")
-        global_research_report = get_report(reports, "Global Lead Analysis Report")
-        
-        # TODO Create better description to fetch accurate similar case study using RAG
-        # get relevant case study
-        case_study_report = fetch_similar_case_study(general_lead_search_report)
-        
+        research_report = get_report(reports, "General Lead Research Report")
+
         inputs = f"""
         **Research Report:**
 
-        {global_research_report}
-
-        ---
-
-        **Case Study:**
-
-        {case_study_report}
+        {research_report}
         """
-        
+
         # Generate report
         custom_outreach_report = invoke_llm(
             system_prompt=GENERATE_OUTREACH_REPORT_PROMPT,
             user_message=inputs,
-            model="gemini-1.5-pro"
+            model="gemini-3.1-flash-lite"
         )
-        
-        # TODO Find better way to include correct links into the final report
-        # Proof read generated report
-        inputs = f"""
-        {custom_outreach_report}
 
-        ---
-
-        **Correct Links:**
-
-        ** Our website link**: https://elevateAI.com
-        ** Case study link**: https://elevateAI.com/case-studies/A
-        """
-        
         # Call our editor/proof-reader agent
         revised_outreach_report = invoke_llm(
             system_prompt=PROOF_READER_PROMPT,
-            user_message=inputs,
-            model="gemini-1.5-flash"
+            user_message=custom_outreach_report,
+            model="gemini-3.1-flash-lite"
         )
         
         # Store report into google docs and get shareable link
@@ -481,7 +295,7 @@ class OutReachAutomationNodes:
         output = invoke_llm(
             system_prompt=PERSONALIZE_EMAIL_PROMPT,
             user_message=lead_data,
-            model="gemini-1.5-flash",
+            model="gemini-3.1-flash-lite",
             response_format=EmailResponse
         )
         
@@ -521,19 +335,19 @@ class OutReachAutomationNodes:
         
         # Load reports
         reports = state["reports"]
-        global_research_report = get_report(reports, "Global Lead Analysis Report")
-        
+        research_report = get_report(reports, "General Lead Research Report")
+
         # Generating SPIN questions
         spin_questions = invoke_llm(
             system_prompt=GENERATE_SPIN_QUESTIONS_PROMPT,
-            user_message=global_research_report,
-            model="gemini-1.5-flash"
+            user_message=research_report,
+            model="gemini-3.1-flash-lite"
         )
-        
+
         inputs = f"""
         # **Lead & company Information:**
 
-        {global_research_report}
+        {research_report}
 
         # **SPIN questions:**
 
@@ -544,7 +358,7 @@ class OutReachAutomationNodes:
         interview_script = invoke_llm(
             system_prompt=WRITE_INTERVIEW_SCRIPT_PROMPT,
             user_message=inputs,
-            model="gemini-1.5-flash"
+            model="gemini-3.1-flash-lite"
         )
         
         interview_script_doc = Report(
@@ -582,13 +396,22 @@ class OutReachAutomationNodes:
 
     def update_CRM(self, state: GraphState):
         print(Fore.YELLOW + "----- Updating CRM records -----\n" + Style.RESET_ALL)
-        
-        # save new record data, ensure correct fields are used
+
+        # The "insufficient research" and "not qualified" paths skip scoring/outreach
+        # generation entirely, so those fields may never have been set - status reflects
+        # which stage this lead actually stopped at rather than always claiming contact.
+        if not state.get("research_sufficient", True):
+            status = "NEEDS_MORE_RESEARCH"
+        elif "custom_outreach_report_link" in state:
+            status = "ATTEMPTED_TO_CONTACT"
+        else:
+            status = "NOT_QUALIFIED"
+
         new_data = {
-            "Status": "ATTEMPTED_TO_CONTACT", # Set lead to attempted contact
-            "Score": state["lead_score"], 
-            "Analysis Reports": state["reports_folder_link"],
-            "Outreach Report": state["custom_outreach_report_link"],
+            "Status": status,
+            "Score": state.get("lead_score", "N/A"),
+            "Analysis Reports": state.get("reports_folder_link", ""),
+            "Outreach Report": state.get("custom_outreach_report_link", ""),
             "Last Contacted": get_current_date()
         }
         self.lead_loader.update_record(state["current_lead"].id, new_data)

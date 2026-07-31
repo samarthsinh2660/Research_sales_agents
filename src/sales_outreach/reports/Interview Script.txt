@@ -1,0 +1,37 @@
+This interview script is designed for a discovery call with a decision-maker at **Shital Infotech**. It balances respect for their 22-year legacy with the need for modern digital growth.
+
+***
+
+### **Interview Script: ElevateAI Marketing Solutions x Shital Infotech**
+
+**Introduction:**
+"Hi [Name], this is [Your Name] from ElevateAI Marketing Solutions. I’ve been following Shital Infotech’s growth, and I’m impressed by your 22-year track record of supporting critical infrastructure in the manufacturing and pharma sectors. How are things going over at the office today?"
+
+**Personalized Hook:**
+"I was reading about your transition from hardware maintenance to developing specialized SaaS solutions for inventory and HR compliance. It’s a significant evolution, and it’s clear that your focus on 'Reliability' and 'Accountability' is what keeps your clients coming back. I’m reaching out because I’d love to discuss how we can help amplify that reputation to reach even more industrial partners."
+
+**Situation Questions:**
+*   "How does your team currently manage the content creation process for your software division’s updates and case studies?"
+*   "What channels are you currently prioritizing to reach decision-makers in the manufacturing and pharmaceutical sectors?"
+*   "How much time does your technical team spend drafting educational content or social media updates versus focusing on core IT infrastructure support?"
+*   "How do you currently communicate your unique value proposition—specifically your 22-year tenure and compliance expertise—to prospective clients online?"
+
+**Problem Questions:**
+*   "Do you find it challenging to maintain a consistent online presence while balancing the high-priority, 24/7 demands of your IT maintenance clients?"
+*   "Are you struggling to translate complex technical topics, like statutory compliance in your HR software, into content that resonates with non-technical factory managers?"
+*   "Is your current website traffic failing to convert into the high-quality leads you need for your custom software division?"
+*   "Do you feel that your brand’s digital voice is currently fragmented or inconsistent across different platforms?"
+
+**Implication Questions:**
+*   "If your digital presence doesn't reflect the same level of 'Reliability' and 'Accountability' as your physical IT services, what impact does that have on your ability to win larger enterprise contracts?"
+*   "How does the lack of a consistent content strategy affect your ability to capture the growing demand in the $130 billion Indian pharmaceutical market?"
+*   "What is the opportunity cost of your technical experts spending hours on marketing tasks instead of focusing on high-value software development or client consultations?"
+*   "If your competitors are using AI-driven SEO to dominate search rankings for 'IT solutions for manufacturing,' how much market share are you potentially losing each quarter?"
+
+**Need-Payoff Questions:**
+*   "If ElevateAI could automate your social media and SEO content, how much more time would your team have to focus on expanding your software division?"
+*   "How would it impact your growth if your website consistently ranked for high-intent keywords related to pharmaceutical IT compliance?"
+*   "If we could ensure your brand voice remains authentic and professional across all channels, how much more confident would you be in your ability to attract larger, long-term partnership contracts?"
+
+**Closing:**
+"It sounds like there’s a massive opportunity to align your digital footprint with the high-quality work you’re already doing on the ground. ElevateAI specializes in exactly this—taking the burden of content and SEO off your plate so you can focus on your core IT partnerships. Would you be open to a 15-minute demo next week to see how we can tailor our AI-driven strategies to Shital Infotech’s specific goals?"

@@ -37,9 +37,11 @@ def get_google_credentials():
     
 def get_report(reports, report_name: str):
     """
-    Retrieves the content of a report by its title.
+    Retrieves the content of a report by its title. If a title appears more than
+    once (e.g. a research retry appending a fresher report under the same title),
+    the most recent one wins, since `reports` is append-only.
     """
-    for report in reports:
+    for report in reversed(reports):
         if report.title == report_name:
             return report.content
     return ""

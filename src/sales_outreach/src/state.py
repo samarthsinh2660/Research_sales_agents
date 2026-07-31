@@ -3,13 +3,6 @@ from typing import List, Annotated
 from typing_extensions import TypedDict
 from operator import add
     
-class SocialMediaLinks(BaseModel):
-    blog: str = ""
-    facebook: str = ""
-    twitter: str = ""
-    youtube: str = ""
-    # Can add other platform
-    
 class Report(BaseModel):
     title: str = ""
     content: str = ""
@@ -23,12 +16,13 @@ class LeadData(BaseModel):
     email: str = Field(..., description="The email address of the lead")
     phone: str = Field(..., description="The phone number of the lead")
     profile: str = Field(..., description="The lead profile summary from LinkedIn data")
+    company_name: str = Field(default="", description="The lead's company name, from the lead sheet")
+    company_website: str = Field(default="", description="The lead's company website, from the lead sheet")
 
 class CompanyData(BaseModel):
     name: str = ""
     profile: str = ""
     website: str = ""
-    social_media_links: SocialMediaLinks = SocialMediaLinks()
     
 class GraphInputState(TypedDict):
     leads_ids: List[str]
@@ -40,6 +34,9 @@ class GraphState(TypedDict):
     lead_score: str = ""
     company_data: CompanyData
     reports: Annotated[list[Report], add]
+    research_sufficient: bool
+    research_gaps: str
+    research_retry_count: int
     reports_folder_link: str
     custom_outreach_report_link: str
     personalized_email: str

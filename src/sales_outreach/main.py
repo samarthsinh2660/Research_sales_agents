@@ -1,3 +1,4 @@
+import asyncio
 import os
 from dotenv import load_dotenv
 from src.graph import OutReachAutomation
@@ -8,7 +9,7 @@ from src.tools.leads_loader.google_sheets import GoogleSheetLeadLoader
 # Load environment variables from a .env file
 load_dotenv()
 
-if __name__ == "__main__":
+async def main():
     # Use Airtable for accessing your leads list
     # lead_loader = AirtableLeadLoader(
     #     access_token=os.getenv("AIRTABLE_ACCESS_TOKEN"),
@@ -32,5 +33,8 @@ if __name__ == "__main__":
 
     # Run the outreach automation with the provided lead name and email
     config = {'recursion_limit': 1000}
-    output = app.invoke(inputs, config)
+    output = await app.ainvoke(inputs, config)
     print(output)
+
+if __name__ == "__main__":
+    asyncio.run(main())

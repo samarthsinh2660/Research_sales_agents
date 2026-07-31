@@ -24,15 +24,11 @@ class OutReachAutomation:
         graph.add_node("get_new_leads", nodes.get_new_leads)
         graph.add_node("check_for_remaining_leads", nodes.check_for_remaining_leads)
 
-        # Research phase: gather data and insights about the lead
-        graph.add_node("fetch_linkedin_profile_data", nodes.fetch_linkedin_profile_data)
-        graph.add_node("review_company_website", nodes.review_company_website)
-        graph.add_node("collect_company_information", nodes.collect_company_information)
-        graph.add_node("analyze_blog_content", nodes.analyze_blog_content)
-        graph.add_node("analyze_social_media_content", nodes.analyze_social_media_content)
-        graph.add_node("analyze_recent_news", nodes.analyze_recent_news)
-        graph.add_node("generate_full_lead_research_report", nodes.generate_full_lead_research_report)
-        graph.add_node("generate_digital_presence_report", nodes.generate_digital_presence_report)
+        # Research phase: shared open_deep_research core replaces kaymen99's own
+        # LinkedIn/SERPER-based pipeline (which needed unconfigured API keys and
+        # never actually worked in this project)
+        graph.add_node("run_shared_research", nodes.run_shared_research)
+        graph.add_node("check_research_sufficiency", nodes.check_research_sufficiency)
         graph.add_node("score_lead", nodes.score_lead)
 
         # Outreach preparation phase
@@ -59,34 +55,33 @@ class OutReachAutomation:
             "check_for_remaining_leads",
             nodes.check_if_there_more_leads,
             {
-                "Found leads": "fetch_linkedin_profile_data",  # Proceed if leads are found
+                "Found leads": "run_shared_research",  # Proceed if leads are found
                 "No more leads": END  # Terminate if no leads remain
             }
         )
 
-        # Research phase transitions
-        graph.add_edge("fetch_linkedin_profile_data", "review_company_website")
-        graph.add_edge("review_company_website", "collect_company_information")
-
-        # Collect company information and branch into various analyses
-        graph.add_edge("collect_company_information", "analyze_blog_content")
-        graph.add_edge("collect_company_information", "analyze_social_media_content")
-        graph.add_edge("collect_company_information", "analyze_recent_news")
-
-        # Analysis results converge into generating reports
-        graph.add_edge("analyze_blog_content", "generate_digital_presence_report")
-        graph.add_edge("analyze_social_media_content", "generate_digital_presence_report")
-        graph.add_edge("analyze_recent_news", "generate_digital_presence_report")
-        graph.add_edge("generate_digital_presence_report", "generate_full_lead_research_report")
+        # Research phase: run the shared research core, then gate on whether it
+        # actually found enough to write a credible pitch - rather than either
+        # duplicating research here or generating a weak email from thin data.
+        # One retry with a gap-focused query is allowed before giving up.
+        graph.add_edge("run_shared_research", "check_research_sufficiency")
+        graph.add_conditional_edges(
+            "check_research_sufficiency",
+            nodes.check_if_research_sufficient,
+            {
+                "sufficient": "score_lead",
+                "retry": "run_shared_research",  # One more targeted pass at the specific gap
+                "insufficient": "save_reports_to_google_docs"  # Still not enough after retry - flag and stop
+            }
+        )
 
         # Scoring phase with conditional qualification check
-        graph.add_edge("generate_full_lead_research_report", "score_lead")
         graph.add_conditional_edges(
             "score_lead",
             nodes.check_if_qualified,
             {
                 "qualified": "generate_custom_outreach_report",  # Proceed if lead is qualified
-                "not qualified": "save_reports_to_google_docs"  # Save reports and exit if lead is unqualified 
+                "not qualified": "save_reports_to_google_docs"  # Save reports and exit if lead is unqualified
             }
         )
 
