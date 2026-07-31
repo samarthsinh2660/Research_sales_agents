@@ -11,6 +11,8 @@ google-auth-httplib2
 colorama
 unstructured
 html2text
+linkedin-scraper
+playwright
 langgraph-api>=0.11.0
 opentelemetry-exporter-otlp-proto-grpc==1.37.0
 grpcio-status==1.80.0

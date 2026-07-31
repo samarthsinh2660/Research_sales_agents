@@ -35,6 +35,9 @@ ENV/
 credentials.json
 token.json
 
+# LinkedIn scraper session (live authenticated session, same sensitivity as an OAuth token)
+.linkedin_session.json
+
 # IDE specific files
 .idea/
 .vscode/

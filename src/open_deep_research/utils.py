@@ -39,7 +39,9 @@ from open_deep_research.state import ResearchComplete, Summary
 ##########################
 TAVILY_SEARCH_DESCRIPTION = (
     "A search engine optimized for comprehensive, accurate, and trusted results. "
-    "Useful for when you need to answer questions about current events."
+    "Useful for when you need to answer questions about current events. "
+    "For recent news, announcements, or press specifically, set topic='news' instead of "
+    "the default 'general' - it returns far more relevant, recent results for that kind of query."
 )
 @tool(description=TAVILY_SEARCH_DESCRIPTION)
 async def tavily_search(
@@ -79,14 +81,8 @@ async def tavily_search(
     # Step 3: Set up the summarization model with configuration
     configurable = Configuration.from_runnable_config(config)
 
-    # Step 3b: Drop low-relevance results (Tavily's own score) before spending model
-    # calls summarizing them. Falls back to the unfiltered set if filtering would
-    # remove everything, so a narrow/niche query never ends up with zero results.
-    relevant_results = {
-        url: result for url, result in unique_results.items()
-        if result.get("score", 1.0) >= configurable.relevance_threshold
-    }
-    unique_results = relevant_results or unique_results
+    # Step 3b: Drop low-relevance results before spending model calls summarizing them
+    unique_results = filter_by_relevance(unique_results, configurable.relevance_threshold)
 
     # Character limit to stay within model token limits (configurable)
     max_char_to_include = configurable.max_content_length
@@ -148,6 +144,25 @@ async def tavily_search(
         formatted_output += "\n\n" + "-" * 80 + "\n"
     
     return formatted_output
+
+def filter_by_relevance(results: dict, threshold: float) -> dict:
+    """Drop results below a Tavily relevance score threshold, keyed by URL.
+
+    Falls back to the unfiltered set if filtering would remove everything, so a
+    narrow/niche query never ends up with zero results.
+
+    Args:
+        results: Dict of {url: result_dict}, where each result_dict may have a 'score' key
+        threshold: Minimum score to keep a result (results with no 'score' key are kept)
+
+    Returns:
+        Filtered dict, or the original dict unchanged if filtering would empty it
+    """
+    relevant_results = {
+        url: result for url, result in results.items()
+        if result.get("score", 1.0) >= threshold
+    }
+    return relevant_results or results
 
 async def tavily_search_async(
     search_queries, 
@@ -225,6 +240,487 @@ async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
         # Other errors during summarization - log and return original content
         logging.warning(f"Summarization failed with error: {str(e)}, returning original content")
         return webpage_content
+
+##########################
+# Website Contact Finder Tool Utils
+##########################
+WEBSITE_CONTACT_FINDER_DESCRIPTION = (
+    "Crawls a specific organization's own website (not a generic search) looking for named "
+    "people and contact information - e.g. About Us, Team, Leadership, or Contact pages - and "
+    "also their blog content and linked social media profiles (Twitter/X, LinkedIn, YouTube, "
+    "Facebook, Instagram). Use this when you already know the organization's official website "
+    "URL and need real contacts, recent blog activity, or social presence rather than generic "
+    "company facts. Do not use this for generic research questions - use tavily_search for those."
+)
+@tool(description=WEBSITE_CONTACT_FINDER_DESCRIPTION)
+async def website_contact_finder(
+    website_url: str,
+    config: RunnableConfig = None
+) -> str:
+    """Crawl an organization's own website for contacts, blog content, and social links.
+
+    Unlike tavily_search's generic query-based search, this targets a known URL directly and
+    crawls it, which surfaces far more from About/Team/Contact/Blog pages than a generic web
+    search. Raw crawled content is returned without a summarization pass, so exact names/
+    emails/URLs aren't lost to lossy summarization.
+
+    Args:
+        website_url: The organization's official website URL (e.g. https://example.com)
+        config: Runtime configuration for API keys
+
+    Returns:
+        Formatted string containing crawled content from contact/blog-relevant pages, with source URLs
+    """
+    tavily_client = AsyncTavilyClient(api_key=get_tavily_api_key(config))
+    try:
+        crawl_result = await tavily_client.crawl(
+            url=website_url,
+            max_depth=2,
+            max_breadth=10,
+            instructions=(
+                "Find pages about the team, leadership, founders, management, or contact "
+                "information - including named people, their roles, and email addresses or "
+                "contact forms. Also find the company's blog (recent post titles/topics) and "
+                "any linked social media profiles (Twitter/X, LinkedIn, YouTube, Facebook, "
+                "Instagram) - usually linked in the site header, footer, or an About/Contact page."
+            ),
+            extract_depth="advanced",
+        )
+    except Exception as e:
+        return f"Could not crawl {website_url}: {str(e)}"
+
+    results = crawl_result.get("results", [])
+    if not results:
+        return f"No contact-relevant pages found by crawling {website_url}."
+
+    configurable = Configuration.from_runnable_config(config)
+    max_char_to_include = configurable.max_content_length
+
+    formatted_output = f"Crawled pages from {website_url}:\n\n"
+    for i, result in enumerate(results):
+        page_url = result.get("url", "")
+        content = result.get("raw_content") or result.get("content", "")
+        formatted_output += f"\n\n--- PAGE {i+1}: {page_url} ---\n\n{content[:max_char_to_include]}\n\n" + "-" * 80 + "\n"
+
+    return formatted_output
+
+##########################
+# LinkedIn Search Tool Utils
+##########################
+LINKEDIN_SESSION_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".linkedin_session.json")
+
+LINKEDIN_SEARCH_DESCRIPTION = (
+    "Looks up a specific LinkedIn profile or company page URL and returns structured data "
+    "(name, headline, experience, education for a person; overview, industry, size for a "
+    "company). Requires a real LinkedIn URL - use tavily_search first to find the URL if you "
+    "don't already have one, then pass it here. Each call is a real LinkedIn page visit under "
+    "a dedicated scraping account, so use it deliberately for a specific known URL, not as a "
+    "general search tool."
+)
+
+async def _linkedin_login(page, email: str, password: str, timeout: int = 30000) -> None:
+    """Log into LinkedIn directly, bypassing linkedin_scraper's login_with_credentials().
+
+    That function's '#username' selector is stale against LinkedIn's current login page
+    markup. Worse: LinkedIn renders the login form TWICE in the DOM (a plain variant with
+    autocomplete="username", and a hidden WebAuthn/passkey variant with
+    autocomplete="username webauthn") - an exact-match selector can silently lock onto
+    whichever copy isn't actually visible. Using Playwright's :visible filter to always
+    target whichever copy is really on screen. Everything else in the library
+    (is_logged_in, PersonScraper, CompanyScraper, session save/load) still works fine -
+    only the login form selector needed a workaround.
+    """
+    from linkedin_scraper import AuthenticationError, is_logged_in
+
+    await page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded")
+
+    email_field = page.locator('input[autocomplete*="username"]:visible').first
+    password_field = page.locator('input[autocomplete="current-password"]:visible').first
+
+    try:
+        await email_field.wait_for(state="visible", timeout=timeout)
+    except Exception:
+        raise AuthenticationError("Login form not found (LinkedIn may have changed their page structure again).")
+
+    await email_field.fill(email)
+    await password_field.fill(password)
+
+    # get_by_role(exact=True) still matches duplicate hidden buttons (same DOM-duplication
+    # issue as the input fields) - "Sign in with Apple" would also match a plain substring
+    # filter, so check visibility explicitly rather than just taking .first
+    sign_in_buttons = page.get_by_role("button", name="Sign in", exact=True)
+    clicked = False
+    for i in range(await sign_in_buttons.count()):
+        btn = sign_in_buttons.nth(i)
+        if await btn.is_visible():
+            await btn.click()
+            clicked = True
+            break
+    if not clicked:
+        raise AuthenticationError("Sign in button not found or not visible.")
+
+    try:
+        await page.wait_for_url(
+            lambda url: "feed" in url or "checkpoint" in url or "authwall" in url,
+            timeout=timeout
+        )
+    except Exception:
+        if "login" in page.url:
+            raise AuthenticationError("Login failed - page did not navigate after clicking sign in. Check credentials.")
+
+    current_url = page.url
+    if "checkpoint" in current_url or "challenge" in current_url:
+        raise AuthenticationError(
+            f"LinkedIn security checkpoint detected - manual verification needed once, "
+            f"then session persistence avoids repeating this. Current URL: {current_url}"
+        )
+    if "authwall" in current_url:
+        raise AuthenticationError(f"Authentication wall encountered. Current URL: {current_url}")
+
+    for _ in range(10):
+        if await is_logged_in(page):
+            return
+        await page.wait_for_timeout(500)
+
+_navigate_and_wait_patched = False
+
+def _patch_navigate_and_wait() -> None:
+    """Patch BaseScraper.navigate_and_wait to settle before checking for rate limits.
+
+    The library calls check_rate_limit() immediately after page.goto(..., wait_until=
+    "domcontentloaded") - which fires before the SPA has actually hydrated real profile
+    content. Verified directly: this causes a false-positive "Rate limit message detected
+    on page" on the very first navigation, while a manual re-check with a short settle
+    delay succeeds cleanly every time. Idempotent - safe to call more than once.
+    """
+    global _navigate_and_wait_patched
+    if _navigate_and_wait_patched:
+        return
+
+    from linkedin_scraper.scrapers.base import BaseScraper
+
+    async def patched_navigate_and_wait(self, url: str, wait_until: str = "domcontentloaded", timeout: int = 60000) -> None:
+        await self.page.goto(url, wait_until=wait_until, timeout=timeout)
+        await self.page.wait_for_timeout(2500)  # let the SPA hydrate before checking content
+        await self.check_rate_limit()
+
+    BaseScraper.navigate_and_wait = patched_navigate_and_wait
+    _navigate_and_wait_patched = True
+
+_person_extraction_patched = False
+
+async def _get_main_content_text(page, timeout: int = 10000) -> str:
+    """Get the main content column's text, however LinkedIn happens to render it.
+
+    data-testid="lazy-column" is present on the main profile page but was observed absent
+    on some /details/* sub-pages (verified directly) - falls back to the full page body,
+    which contains the same structured text either way.
+    """
+    column = page.locator('[data-testid="lazy-column"]').first
+    if await column.count() > 0:
+        return await column.inner_text(timeout=timeout)
+    return await page.locator("body").inner_text(timeout=timeout)
+
+_DATE_RANGE_PATTERN = re.compile(r"\b(19|20)\d{2}\b.*(present|\b(19|20)\d{2}\b)", re.IGNORECASE)
+
+def _patch_person_extraction() -> None:
+    """Patch PersonScraper's field extraction (name, location, about, experience, education).
+
+    linkedin_scraper's selectors for these are stale against LinkedIn's current markup -
+    verified directly: LinkedIn no longer uses <h1> for the name or <h2> "Experience"/
+    "Education" headings inline on the main profile page (moved to dedicated /details/*
+    sub-pages), and profile-card data attributes it relies on for About no longer exist.
+    LinkedIn's visual CSS classes are build-hashed and churn every deploy (e.g. "_036a6bd2
+    ffb20cf8..."), so matching those directly is a losing battle - instead this extracts
+    from data-testid="lazy-column" (a stable test-automation hook) and parses fields
+    positionally/structurally, which is far more resilient to LinkedIn's routine CSS-in-JS
+    class churn than exact class selectors.
+
+    Experience entries are anchored on date-range lines (e.g. "Feb 2014 - Present · 12 yrs
+    6 mos") via regex, since that's the one line every entry reliably has - title/company
+    are the two lines before it, and any line(s) before the next entry's title are treated
+    as location. Education entries don't reliably have dates (some show a degree line
+    instead - verified directly on a real profile), so those are parsed as simple pairs of
+    (institution, degree-or-dates) lines instead.
+
+    Interests/accomplishments/contacts extraction remains unfixed and will keep returning
+    empty - lower value for outreach personalization than who someone is, their role,
+    location, and work history, and each would need its own reverse-engineering pass.
+    """
+    global _person_extraction_patched
+    if _person_extraction_patched:
+        return
+
+    from linkedin_scraper import PersonScraper
+    from linkedin_scraper.models.person import Education, Experience
+
+    async def patched_get_name_and_location(self):
+        try:
+            text = await _get_main_content_text(self.page)
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
+            name = lines[0] if lines else "Unknown"
+            location = lines[2] if len(lines) > 2 and "," in lines[2] else None
+            return name, location
+        except Exception as e:
+            logging.warning(f"Error getting name/location: {e}")
+            return "Unknown", None
+
+    async def patched_get_about(self):
+        try:
+            text = await _get_main_content_text(self.page)
+            if "\nAbout\n" not in text:
+                return None
+            after_about = text.split("\nAbout\n", 1)[1]
+            # About runs until the next major section heading
+            for stop_marker in ["\nFeatured\n", "\nActivity\n", "\nExperience\n"]:
+                if stop_marker in after_about:
+                    after_about = after_about.split(stop_marker, 1)[0]
+            return after_about.strip() or None
+        except Exception as e:
+            logging.debug(f"Error getting about section: {e}")
+            return None
+
+    async def patched_get_experiences(self, base_url: str):
+        try:
+            exp_url = base_url.rstrip("/") + "/details/experience/"
+            await self.navigate_and_wait(exp_url)
+            text = await _get_main_content_text(self.page)
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
+            if "Experience" in lines:
+                lines = lines[lines.index("Experience") + 1:]
+
+            date_indices = [i for i, line in enumerate(lines) if _DATE_RANGE_PATTERN.search(line)]
+            experiences = []
+            for idx, date_idx in enumerate(date_indices):
+                if date_idx < 2:
+                    continue
+                title = lines[date_idx - 2]
+                company = lines[date_idx - 1]
+                duration = lines[date_idx]
+                next_entry_start = date_indices[idx + 1] - 2 if idx + 1 < len(date_indices) else min(date_idx + 3, len(lines))
+                location_lines = lines[date_idx + 1:next_entry_start]
+                location = location_lines[0] if location_lines else None
+                experiences.append(Experience(
+                    position_title=title,
+                    institution_name=company,
+                    duration=duration,
+                    location=location,
+                    from_date="",
+                    to_date="",
+                    description="",
+                ))
+            return experiences
+        except Exception as e:
+            logging.warning(f"Error getting experiences: {e}")
+            return []
+
+    async def patched_get_educations(self, base_url: str):
+        try:
+            edu_url = base_url.rstrip("/") + "/details/education/"
+            await self.navigate_and_wait(edu_url)
+            text = await _get_main_content_text(self.page)
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
+            if "Education" in lines:
+                lines = lines[lines.index("Education") + 1:]
+            # Stop at the next unrelated section (sidebar recommendations, footer, etc.)
+            for stop_marker in ["More profiles for you", "About", "Accessibility"]:
+                if stop_marker in lines:
+                    lines = lines[:lines.index(stop_marker)]
+
+            educations = []
+            for i in range(0, len(lines) - 1, 2):
+                educations.append(Education(
+                    institution_name=lines[i],
+                    degree=lines[i + 1],
+                    from_date="",
+                    to_date="",
+                    description="",
+                ))
+            return educations
+        except Exception as e:
+            logging.warning(f"Error getting educations: {e}")
+            return []
+
+    PersonScraper._get_name_and_location = patched_get_name_and_location
+    PersonScraper._get_about = patched_get_about
+    PersonScraper._get_experiences = patched_get_experiences
+    PersonScraper._get_educations = patched_get_educations
+    _person_extraction_patched = True
+
+@tool(description=LINKEDIN_SEARCH_DESCRIPTION)
+async def linkedin_search(linkedin_url: str) -> str:
+    """Scrape a LinkedIn profile or company page for structured data.
+
+    Reuses a saved login session across calls (session.json) so most calls don't need a fresh
+    login - repeated logins are themselves a signal LinkedIn's detection systems watch for.
+
+    Args:
+        linkedin_url: Full LinkedIn URL, e.g. https://linkedin.com/in/username or
+            https://linkedin.com/company/company-name
+
+    Returns:
+        Formatted string of the scraped data, or a clear error message if scraping failed
+    """
+    from linkedin_scraper import (
+        AuthenticationError,
+        BrowserManager,
+        CompanyScraper,
+        LinkedInScraperException,
+        PersonScraper,
+        ProfileNotFoundError,
+        RateLimitError,
+        load_credentials_from_env,
+    )
+
+    email, password = load_credentials_from_env()
+    if not email or not password:
+        return (
+            "LinkedIn credentials not configured (LINKEDIN_EMAIL/LINKEDIN_PASSWORD env vars "
+            "missing) - skipping LinkedIn lookup. Use tavily_search or website_contact_finder instead."
+        )
+
+    try:
+        async with BrowserManager(headless=True) as browser:
+            session_valid = False
+            if os.path.exists(LINKEDIN_SESSION_PATH):
+                try:
+                    # load_session() closes the current page/context and creates new ones,
+                    # so browser.page must be re-read after this call, not cached beforehand
+                    await browser.load_session(LINKEDIN_SESSION_PATH)
+                    session_valid = browser.is_authenticated
+                except Exception:
+                    session_valid = False
+
+            page = browser.page
+
+            if not session_valid:
+                await _linkedin_login(page, email, password)
+                await browser.save_session(LINKEDIN_SESSION_PATH)
+
+            _patch_navigate_and_wait()
+            _patch_person_extraction()
+            scraper = CompanyScraper(page) if "/company/" in linkedin_url else PersonScraper(page)
+            try:
+                result = await scraper.scrape(linkedin_url)
+            except RateLimitError as e:
+                # The library checks for rate-limit phrases immediately after
+                # domcontentloaded, before the page has actually hydrated real content -
+                # a transient loading-state false positive, verified directly (manual
+                # re-checks with a short settle delay succeed cleanly). Only retry this
+                # specific false-positive-prone check, not a real checkpoint/CAPTCHA block.
+                if "Rate limit message detected on page" not in str(e):
+                    raise
+                await page.wait_for_timeout(3000)
+                result = await scraper.scrape(linkedin_url)
+            return f"LinkedIn data for {linkedin_url}:\n\n{result.model_dump_json(indent=2)}"
+
+    except AuthenticationError as e:
+        return f"LinkedIn login failed: {e}"
+    except RateLimitError as e:
+        return f"LinkedIn rate limit hit, back off before retrying: {e}"
+    except ProfileNotFoundError as e:
+        return f"LinkedIn profile/company not found at {linkedin_url}: {e}"
+    except LinkedInScraperException as e:
+        return f"LinkedIn scraping error: {e}"
+
+##########################
+# YouTube Search Tool Utils
+##########################
+YOUTUBE_SEARCH_DESCRIPTION = (
+    "Searches YouTube for a person's or organization's channel and returns the channel's "
+    "description, subscriber count, and their most recent videos (titles, descriptions, "
+    "publish dates). Uses the official YouTube Data API - no scraping. Useful for learning "
+    "what someone or some organization publicly talks about and is currently focused on, to "
+    "personalize outreach with specific, real, recent detail rather than generic claims."
+)
+@tool(description=YOUTUBE_SEARCH_DESCRIPTION)
+async def youtube_search(query: str, max_videos: int = 5) -> str:
+    """Search YouTube for a channel and return its info plus recent videos.
+
+    Args:
+        query: Name of the person, company, or channel to search for
+        max_videos: Max number of recent videos to include (default 5)
+
+    Returns:
+        Formatted string with channel info and recent video titles/descriptions
+    """
+    api_key = os.getenv("YOUTUBE_API_KEY")
+    if not api_key:
+        return "YouTube API key not configured (YOUTUBE_API_KEY env var missing) - skipping YouTube lookup."
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Step 1: find candidate channels. YouTube's default search relevance ranking
+            # does NOT prioritize the most legitimate/largest channel - a small unrelated
+            # channel with matching keywords in its title can outrank the real one
+            # (verified directly: searching "Satya Nadella" returned a 1-subscriber student
+            # project channel first). Fetch several candidates and pick by subscriber count
+            # instead of trusting result order.
+            async with session.get(
+                "https://www.googleapis.com/youtube/v3/search",
+                params={"part": "snippet", "q": query, "type": "channel", "maxResults": 5, "key": api_key}
+            ) as resp:
+                search_data = await resp.json()
+
+            candidates = search_data.get("items", [])
+            if not candidates:
+                return f"No YouTube channel found for '{query}'."
+
+            candidate_ids = [c["id"]["channelId"] for c in candidates]
+
+            # Step 2: get stats for all candidates in one call, pick the most-subscribed
+            async with session.get(
+                "https://www.googleapis.com/youtube/v3/channels",
+                params={"part": "snippet,statistics", "id": ",".join(candidate_ids), "key": api_key}
+            ) as resp:
+                channels_data = await resp.json()
+
+            channels = channels_data.get("items", [])
+            if not channels:
+                return f"Channel(s) found for '{query}' but details unavailable."
+
+            def _subscriber_count(ch):
+                try:
+                    return int(ch.get("statistics", {}).get("subscriberCount", 0))
+                except (ValueError, TypeError):
+                    return 0
+
+            channel = max(channels, key=_subscriber_count)
+            channel_id = channel["id"]
+            channel_title = channel.get("snippet", {}).get("title", query)
+            description = channel.get("snippet", {}).get("description", "")
+            stats = channel.get("statistics", {})
+            subscriber_count = stats.get("subscriberCount", "hidden")
+            video_count = stats.get("videoCount", "0")
+
+            # Step 3: get recent videos, newest first
+            async with session.get(
+                "https://www.googleapis.com/youtube/v3/search",
+                params={
+                    "part": "snippet", "channelId": channel_id, "type": "video",
+                    "order": "date", "maxResults": max_videos, "key": api_key
+                }
+            ) as resp:
+                videos_data = await resp.json()
+
+            videos = videos_data.get("items", [])
+
+        formatted_output = f"YouTube channel: {channel_title}\n"
+        formatted_output += f"Subscribers: {subscriber_count} | Total videos: {video_count}\n"
+        formatted_output += f"Channel description: {description}\n\n"
+        formatted_output += "Recent videos:\n"
+        if not videos:
+            formatted_output += "(none found)\n"
+        for video in videos:
+            title = video["snippet"]["title"]
+            published = video["snippet"]["publishedAt"]
+            video_desc = video["snippet"].get("description", "")[:200]
+            formatted_output += f"- {title} ({published}): {video_desc}\n"
+
+        return formatted_output
+
+    except Exception as e:
+        return f"YouTube lookup failed: {e}"
 
 ##########################
 # Reflection Tool Utils
@@ -597,7 +1093,20 @@ async def get_all_tools(config: RunnableConfig):
     search_api = SearchAPI(get_config_value(configurable.search_api))
     search_tools = await get_search_tool(search_api)
     tools.extend(search_tools)
-    
+
+    # Website contact finder needs Tavily's crawl() specifically, so only add it
+    # alongside Tavily search (not for OpenAI/Anthropic native web search or no-search config)
+    if search_api == SearchAPI.TAVILY:
+        tools.append(website_contact_finder)
+
+    # Only expose LinkedIn search once a dedicated scraping account is actually configured -
+    # otherwise it's a tool call guaranteed to fail before an account even exists
+    if os.getenv("LINKEDIN_EMAIL") and os.getenv("LINKEDIN_PASSWORD"):
+        tools.append(linkedin_search)
+
+    if os.getenv("YOUTUBE_API_KEY"):
+        tools.append(youtube_search)
+
     # Track existing tool names to prevent conflicts
     existing_tool_names = {
         tool.name if hasattr(tool, "name") else tool.get("name", "web_search") 

@@ -18,6 +18,7 @@ ENTITY_REGISTRY: dict[str, dict] = {
             "industry: market position, competitors, industry trends",
             "financial: revenue model, funding history/rounds, pricing/business model",
             "news: recent press, leadership changes, expansion/contraction signals",
+            "company's own website and blog content: recent posts, product updates, thought leadership, stated focus areas",
             "decision makers and company size",
         ],
     },
@@ -42,9 +43,9 @@ ENTITY_REGISTRY: dict[str, dict] = {
     "person": {
         "targets": [
             "current role and affiliation",
-            "professional background",
+            "professional background and work history",
             "public profile (LinkedIn, personal site, etc.)",
-            "recent news or public statements",
+            "recent news, public statements, or YouTube presence (what they're currently, publicly focused on)",
         ],
     },
     "general": {

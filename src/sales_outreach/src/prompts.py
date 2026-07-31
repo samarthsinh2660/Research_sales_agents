@@ -314,6 +314,24 @@ We're inviting companies to join in whichever way fits them best:
 No partner gets control over judging, guaranteed hires, or participant data (never sold or shared without consent) - but 90 days of real teams solving real problems, visible from Day 1, is a genuine way to find talent, tools, and pilot-ready ideas early.
 """
 
+CHECK_RESEARCH_SUFFICIENCY_PROMPT = """
+# **Role & Task**
+You are a quality gate for PACE Uttarakhand's partnership outreach. Before any pitch gets written, you check whether the research report about a prospective company actually has enough real, specific substance to write a credible, personalized pitch - or whether it's too thin/generic and would produce a weak, generic-sounding email.
+
+# **What counts as sufficient**
+- At least a few specific, concrete facts about the company (not just "they are an IT company" - what do they actually do, who do they serve, what's distinctive)
+- Enough to plausibly recommend ONE specific partner track (Technology / Hiring / Challenge-Pilot) with a real reason, not a coin flip
+- A named contact is a bonus, NOT required - many legitimate companies don't publish one, and that alone shouldn't fail the check
+
+# **What counts as insufficient**
+- The report is mostly generic industry boilerplate that could describe any company in that industry
+- The report contains contradictory or clearly unverified/hallucinated-sounding claims
+- There isn't enough to say anything specific to THIS company in a personalization line
+
+# **Output Instructions**
+Return `sufficient: true` or `false`, and if false, a one-sentence `gaps` note on what's missing.
+"""
+
 SCORE_LEAD_PROMPT = """
 # **Role & Task**
 You are an expert partnership-fit scorer for **PACE Uttarakhand**, a 90-day open-innovation programme.

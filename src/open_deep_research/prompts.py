@@ -164,6 +164,9 @@ After each ConductResearch tool call, use think_tool to analyze the results:
 - *Example*: Compare OpenAI vs. Anthropic vs. DeepMind approaches to AI safety → Use 3 sub-agents
 - Delegate clear, distinct, non-overlapping subtopics
 
+**Researching an organization (company, college, government department, etc.)** must always include one dedicated sub-agent whose only job is finding named contact people and their contact information (name, role, email, contact page), separate from the sub-agent(s) covering general facts about the organization. This is not optional even for a single-agent-sized request - if the research brief is about an organization, spawn at least 2 sub-agents: one for general facts, one specifically for contacts.
+- *Example research_topic for the dedicated contact sub-agent*: "Find named people (leadership, founders, or department contacts) and their contact information (email, role, LinkedIn) for [organization]. Check their official website's About/Team/Contact pages first (website_contact_finder), then use tavily_search to find their LinkedIn URL and linkedin_search (if available) for a structured profile."
+
 **Important Reminders:**
 - Each ConductResearch call spawns a dedicated research agent for that specific topic
 - A separate agent will write the final report - you just need to gather information
@@ -179,9 +182,12 @@ You can use any of the tools provided to you to find resources that can help ans
 </Task>
 
 <Available Tools>
-You have access to two main tools:
-1. **tavily_search**: For conducting web searches to gather information
-2. **think_tool**: For reflection and strategic planning during research
+You have access to these main tools:
+1. **tavily_search**: For conducting web searches to gather general information. When the research brief calls for recent news, announcements, or press (e.g. "recent news," "recent announcements or public press," "expansion/contraction signals"), set topic="news" on this call instead of the default "general" - it returns far more relevant, recent results for those targets.
+2. **website_contact_finder**: For finding named people and contact information (email, role), recent blog content, and linked social media profiles (Twitter/X, LinkedIn, YouTube, Facebook, Instagram) by crawling an organization's own website - use this once you know the organization's official URL and the research brief calls for a contact, blog activity, or social presence. Do not use it for generic fact-finding - use tavily_search for that.
+3. **linkedin_search**: For structured data on a specific person or company's LinkedIn page - only available when a LinkedIn scraping account is configured. Requires an actual LinkedIn URL; find it with tavily_search first if you don't have one. Use deliberately for a specific known profile/company, not as a general search tool.
+4. **youtube_search**: For a person's or organization's YouTube channel - description, subscriber count, and recent video titles/descriptions. Only available when configured. Useful for finding what someone is currently, publicly focused on (a specific recent talk, project, or topic) to personalize outreach with real, current detail instead of generic claims.
+5. **think_tool**: For reflection and strategic planning during research
 {mcp_prompt}
 
 **CRITICAL: Use think_tool after each search to reflect on results and plan next steps. Do not call think_tool with the tavily_search or any other tools. It should be to reflect on the results of the search.**
@@ -286,7 +292,8 @@ Please create a detailed answer to the overall research brief that:
 2. Includes specific facts and insights from the research
 3. References relevant sources using [Title](URL) format
 4. Provides a balanced, thorough analysis. Be as comprehensive as possible, and include all information that is relevant to the overall research question. People are using you for deep research and will expect detailed, comprehensive answers.
-5. Includes a "Sources" section at the end with all referenced links
+5. If the research brief is about an organization (company, college, government department, etc.), include a "Key Contacts" section listing any named people, roles, and contact information (email, contact page) found in the research - even if only one, and clearly note "No named contact found" if the research genuinely turned up none rather than omitting the section
+6. Includes a "Sources" section at the end with all referenced links
 
 You can structure your report in a number of different ways. Here are some examples:
 
