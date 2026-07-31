@@ -12,6 +12,7 @@ from typing import Literal
 
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
@@ -41,6 +42,24 @@ from sales_outreach.utils import (
 
 RESEARCH_REPORT_TITLE = "General Lead Research Report"
 EMAIL_REPORT_TITLE = "Personalized Email"
+
+# Cleared when a target ends, however it ends. Shared by the normal path and the failure
+# path so the two cannot drift: a field reset in one but not the other would leak that
+# target's report or score into the next one. Coverage is asserted against
+# PER_TARGET_FIELDS by test.
+PER_TARGET_RESET: dict = {
+    "current_target_failed": False,
+    "reports": {"type": "override", "value": []},
+    "final_report": "",
+    "entity_type": None,
+    "research_sufficient": False,
+    "research_gaps": "",
+    "research_retry_count": 0,
+    "lead_score": "",
+    "lead_qualified": False,
+    "outreach_report_link": "",
+    "send_approved": None,
+}
 
 
 def _at_least(configurable: AgentConfiguration, intent: OutreachIntent) -> bool:
@@ -76,13 +95,21 @@ def _isolated(node):
     still queued behind it. A long batch makes that near-certain, so a failing target is
     recorded and skipped instead.
 
-    Not applied to finish_target, which is the recovery destination: routing its own
-    failures back to itself would loop forever.
+    finish_target is wrapped separately by _isolated_finish: it is the recovery
+    destination, so routing its own failures back to itself would loop forever.
+
+    GraphBubbleUp is re-raised rather than caught. LangGraph signals control flow through
+    exceptions - interrupt() raises GraphInterrupt to pause for human input, and
+    Command(graph=PARENT) raises ParentCommand - both of which subclass Exception. Treating
+    those as target failures silently turns the send-approval pause into a skipped target,
+    disabling the human-in-the-loop gate exactly when it matters.
     """
     @functools.wraps(node)
     async def wrapper(state: AgentState, config: RunnableConfig):
         try:
             return await node(state, config)
+        except GraphBubbleUp:
+            raise
         except Exception as e:
             target = state.get("current_target")
             name = target.name if target else "<unknown>"
@@ -94,6 +121,42 @@ def _isolated(node):
                     "failures": {
                         "type": "override",
                         "value": [*state.get("failures", []), f"{name} [{node.__name__}]: {e}"],
+                    },
+                },
+            )
+    return wrapper
+
+
+def _isolated_finish(node):
+    """Wrap finish_target so its own failure skips one target rather than the batch.
+
+    It writes files and, for sheet-sourced targets, makes a Google Sheets network call -
+    either can fail transiently. Recovery goes forward to next_target instead of back to
+    finish_target, because a wrapper that routes failures to itself would loop forever.
+
+    Per-target state is reset on this path too. Without that, a target that failed here
+    would leak its report and score into the next one, which is the leak the reset in
+    finish_target exists to prevent.
+    """
+    @functools.wraps(node)
+    async def wrapper(state: AgentState, config: RunnableConfig):
+        try:
+            return await node(state, config)
+        except GraphBubbleUp:
+            raise
+        except Exception as e:
+            target = state.get("current_target")
+            name = target.name if target else "<unknown>"
+            logging.exception(f"Target '{name}' failed while finishing: {e}")
+            return Command(
+                goto="next_target",
+                update={
+                    **PER_TARGET_RESET,
+                    "targets_remaining": max(0, state.get("targets_remaining", 1) - 1),
+                    "consecutive_failures": state.get("consecutive_failures", 0) + 1,
+                    "failures": {
+                        "type": "override",
+                        "value": [*state.get("failures", []), f"{name} [finish_target]: {e}"],
                     },
                 },
             )
@@ -112,10 +175,24 @@ async def start_run(state: AgentState, config: RunnableConfig) -> Command[Litera
 
     Returns:
         Command to enter the per-target loop
+
+    Raises:
+        ValueError: if a caller-supplied list exceeds max_targets
     """
-    targets = state.get("targets") or await resolve_targets(
-        _prompt_text(state.get("messages")), config
-    )
+    targets = state.get("targets")
+    if targets:
+        # resolve_targets enforces the cap on the paths it owns; a caller-supplied list
+        # skips it, and an uncapped batch is exactly the cost surprise the cap exists
+        # to prevent, so it is enforced here too.
+        limit = AgentConfiguration.from_runnable_config(config).max_targets
+        if len(targets) > limit:
+            raise ValueError(
+                f"Received {len(targets)} targets, above the max_targets limit of "
+                f"{limit}. Raise the limit or pass fewer targets."
+            )
+    else:
+        targets = await resolve_targets(_prompt_text(state.get("messages")), config)
+
     return Command(
         goto="next_target",
         update={"targets": targets, "targets_remaining": len(targets), "failures": []},
@@ -440,19 +517,9 @@ async def finish_target(state: AgentState, config: RunnableConfig) -> Command[Li
     return Command(
         goto="next_target",
         update={
+            **PER_TARGET_RESET,
             "targets_remaining": max(0, state.get("targets_remaining", 1) - 1),
             "consecutive_failures": consecutive,
-            "current_target_failed": False,
-            "reports": {"type": "override", "value": []},
-            "final_report": "",
-            "entity_type": None,
-            "research_sufficient": False,
-            "research_gaps": "",
-            "research_retry_count": 0,
-            "lead_score": "",
-            "lead_qualified": False,
-            "outreach_report_link": "",
-            "send_approved": None,
         },
     )
 
@@ -491,7 +558,7 @@ def build_unified_agent(research_node=deep_researcher):
     builder.add_node("generate_materials", _isolated(generate_materials))
     builder.add_node("approve_send", _isolated(approve_send))             # Human-in-the-loop gate
     builder.add_node("send_email", _isolated(send_email))
-    builder.add_node("finish_target", finish_target)
+    builder.add_node("finish_target", _isolated_finish(finish_target))
 
     # A compiled subgraph node cannot return a Command, so its one outgoing edge is declared.
     builder.add_edge(START, "start_run")
