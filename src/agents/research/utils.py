@@ -88,23 +88,20 @@ async def tavily_search(
     # Character limit to stay within model token limits (configurable)
     max_char_to_include = configurable.max_content_length
     
-    # Initialize summarization model with retry logic
-    # max_retries=3 so a rate-limited provider fails fast into with_fallbacks() instead
-    # of retrying internally for a long time and tripping the 60s summarization timeout
+    # max_retries=0: retrying the primary burns the caller's 60s timeout before the
+    # fallback is ever reached.
     model_api_key = get_api_key_for_model(configurable.summarization_model, config)
     fallback_summarization_model = init_chat_model(
         **get_fallback_model_config(configurable, config, configurable.summarization_model_max_tokens),
-        max_retries=3,
+        max_retries=2,
     ).with_structured_output(Summary)
     summarization_model = init_chat_model(
         model=configurable.summarization_model,
         max_tokens=configurable.summarization_model_max_tokens,
         api_key=model_api_key,
         tags=["langsmith:nostream"],
-        max_retries=3,
-    ).with_structured_output(Summary).with_retry(
-        stop_after_attempt=configurable.max_structured_output_retries
-    ).with_fallbacks([fallback_summarization_model])
+        max_retries=0,
+    ).with_structured_output(Summary).with_fallbacks([fallback_summarization_model])
     
     # Step 4 & 5: Summarize results one at a time (not in parallel) so a single search
     # step (which can have 7-8 results) doesn't burst past Gemini free tier's
@@ -1475,6 +1472,16 @@ def extract_answer_text(content) -> str:
         )
     return str(content)
 
+def _normalize_url(url: str) -> str:
+    """Reduce a URL to a comparable form.
+
+    Both sides must be normalized identically. Findings carry URLs inside markdown links
+    and sentences, so they arrive with trailing `)`, `,` or `.` attached, while a cited
+    URL does not - comparing them raw drops every real citation.
+    """
+    return url.rstrip(').,;:\'"]>').rstrip('/').lower()
+
+
 def verify_citations(report_content: str, findings: str) -> str:
     """Strip citation lines from a report's Sources section whose URL doesn't
     actually appear in the research findings, catching writer-model hallucinated
@@ -1487,7 +1494,7 @@ def verify_citations(report_content: str, findings: str) -> str:
     Returns:
         The report with any unverifiable citation lines removed
     """
-    findings_urls = set(re.findall(r'https?://\S+', findings))
+    findings_urls = {_normalize_url(u) for u in re.findall(r'https?://\S+', findings)}
     lines = report_content.split("\n")
     verified_lines = []
     total_citations = 0
@@ -1496,20 +1503,18 @@ def verify_citations(report_content: str, findings: str) -> str:
         match = re.match(r"^\s*\[\d+\].*?(https?://\S+)", line)
         if match:
             total_citations += 1
-            cited_url = match.group(1).rstrip(').,\'"')
-            if cited_url not in findings_urls:
+            if _normalize_url(match.group(1)) not in findings_urls:
                 dropped_citations += 1
                 continue
         verified_lines.append(line)
 
-    # A silent mass-strip (e.g. from corrupted findings text) is worse than a few
-    # legitimately hallucinated citations getting caught - surface it loudly instead
-    # of letting the report ship with an empty Sources section unexplained.
+    # A mass-strip means the comparison is broken, not that the writer invented every
+    # source - a report cannot cite ten hallucinated URLs and no real one.
     if total_citations > 0 and dropped_citations / total_citations > 0.5:
         logging.warning(
             f"verify_citations dropped {dropped_citations}/{total_citations} citations "
-            "(>50%) - this usually means the findings text passed in is corrupted "
-            "rather than that the writer model hallucinated most of its sources."
+            "(>50%) - suspect URL matching rather than hallucination; the report will "
+            "ship with most of its Sources section missing."
         )
 
     return "\n".join(verified_lines)

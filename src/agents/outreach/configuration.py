@@ -123,7 +123,7 @@ class SalesConfiguration(BaseModel):
 
     # Model Configuration
     research_sufficiency_model: str = Field(
-        default="google_genai:gemini-3.6-flash",
+        default="google_genai:gemini-3.5-flash-lite",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -133,7 +133,7 @@ class SalesConfiguration(BaseModel):
         }
     )
     lead_scoring_model: str = Field(
-        default="google_genai:gemini-3-flash-preview",
+        default="google_genai:gemini-3.5-flash-lite",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -153,7 +153,7 @@ class SalesConfiguration(BaseModel):
         }
     )
     email_model: str = Field(
-        default="google_genai:gemini-3.1-flash-lite",
+        default="google_genai:gemini-3.5-flash-lite",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -163,7 +163,7 @@ class SalesConfiguration(BaseModel):
         }
     )
     interview_script_model: str = Field(
-        default="google_genai:gemini-3.6-flash",
+        default="google_genai:gemini-3.5-flash-lite",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",

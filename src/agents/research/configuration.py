@@ -119,7 +119,7 @@ class Configuration(BaseModel):
     )
     # Model Configuration
     summarization_model: str = Field(
-        default="google_genai:gemini-3.6-flash",
+        default="google_genai:gemini-3.5-flash-lite",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -184,7 +184,7 @@ class Configuration(BaseModel):
         }
     )
     compression_model: str = Field(
-        default="google_genai:gemini-3-flash-preview",
+        default="google_genai:gemini-3.5-flash-lite",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
@@ -204,7 +204,7 @@ class Configuration(BaseModel):
         }
     )
     final_report_model: str = Field(
-        default="google_genai:gemini-3.1-flash-lite",
+        default="google_genai:gemini-3.5-flash-lite",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
