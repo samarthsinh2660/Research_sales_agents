@@ -279,7 +279,9 @@ async def _fetch_via_tavily(url: str) -> str:
         return ""
 
 
-async def _targets_from_page(url: str, config: RunnableConfig) -> List[Target]:
+async def _targets_from_page(
+    url: str, config: RunnableConfig, request: str = ""
+) -> List[Target]:
     """Extract organizations and people from a listing page.
 
     Rendering plus model-based extraction, rather than per-site regex: every event page
@@ -293,6 +295,10 @@ async def _targets_from_page(url: str, config: RunnableConfig) -> List[Target]:
     Args:
         url: The listing or event page to extract from
         config: Runtime configuration for model settings
+        request: What the caller asked for, e.g. "engineering colleges in Dehradun".
+            Passed to the model so it returns only matching entries. A "top 10 colleges"
+            page is usually one college's marketing page carrying its recruiter logos,
+            and returning Google and Adobe alongside the colleges is not useful.
 
     Returns:
         Targets extracted from the page
@@ -310,16 +316,19 @@ async def _targets_from_page(url: str, config: RunnableConfig) -> List[Target]:
     if not text.strip():
         return []
 
-    return await _extract_targets(text, url, config)
+    return await _extract_targets(text, url, config, request)
 
 
-async def _extract_targets(text: str, url: str, config: RunnableConfig) -> List[Target]:
+async def _extract_targets(
+    text: str, url: str, config: RunnableConfig, request: str = ""
+) -> List[Target]:
     """Have a model pull organizations and named people out of rendered page text.
 
     Args:
         text: Rendered page text
         url: Source page, used as context
         config: Runtime configuration for model settings
+        request: What the caller asked for, so the model returns only matching entries
 
     Returns:
         Extracted targets; falls back to regex extraction if the model call fails
@@ -327,6 +336,19 @@ async def _extract_targets(text: str, url: str, config: RunnableConfig) -> List[
     from agents.outreach.configuration import SalesConfiguration
     from agents.outreach.utils import invoke_llm
     from orchestrator.state import ExtractedTargets
+
+    # Filtering belongs here, where a model is already reading the page, rather than in
+    # the caller: a keyword list downstream cannot tell a college from its recruiters
+    # without re-deriving what the page already says, and gets it wrong on the next site.
+    wanted = (
+        f"\n\n# What the user asked for\n{request}\n"
+        "Return ONLY entries matching that request. A listing page carries other "
+        "organizations - recruiters, sponsors, parent bodies, the site's own brand - "
+        "and those are not what was asked for even though they appear on the page. "
+        "If nothing on the page matches, return an empty list rather than substituting "
+        "whatever else is there."
+        if request.strip() else ""
+    )
 
     try:
         extracted = await invoke_llm(
@@ -340,6 +362,7 @@ async def _extract_targets(text: str, url: str, config: RunnableConfig) -> List[
                 "Speakers'), the hosting site's own brand, archive or edition titles, "
                 "generic words, and anything that is not a real organization or person. "
                 "Copy names verbatim from the page; never invent or complete a name."
+                + wanted
             ),
             user_message=f"Source page: {url}\n\nPage text:\n{text}",
             model_name=SalesConfiguration.from_runnable_config(config).research_sufficiency_model,

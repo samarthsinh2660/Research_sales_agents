@@ -123,31 +123,31 @@ class SalesConfiguration(BaseModel):
 
     # Model Configuration
     research_sufficiency_model: str = Field(
-        default="google_genai:gemini-3.1-flash-lite",
+        default="google_genai:gemini-3.6-flash",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.1-flash-lite",
+                "default": "google_genai:gemini-3.5-flash-lite",
                 "description": "Model that judges whether research is substantial enough to pitch on"
             }
         }
     )
     lead_scoring_model: str = Field(
-        default="google_genai:gemini-3.1-flash-lite",
+        default="google_genai:gemini-3-flash-preview",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.1-flash-lite",
+                "default": "google_genai:gemini-3.5-flash-lite",
                 "description": "Model for scoring partnership fit"
             }
         }
     )
     outreach_report_model: str = Field(
-        default="google_genai:gemini-3.1-flash-lite",
+        default="google_genai:gemini-3.5-flash-lite",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.1-flash-lite",
+                "default": "google_genai:gemini-3.5-flash-lite",
                 "description": "Model for writing and proofreading the custom outreach report"
             }
         }
@@ -157,17 +157,17 @@ class SalesConfiguration(BaseModel):
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.1-flash-lite",
+                "default": "google_genai:gemini-3.5-flash-lite",
                 "description": "Model for writing the personalized outreach email"
             }
         }
     )
     interview_script_model: str = Field(
-        default="google_genai:gemini-3.1-flash-lite",
+        default="google_genai:gemini-3.6-flash",
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.1-flash-lite",
+                "default": "google_genai:gemini-3.5-flash-lite",
                 "description": "Model for generating SPIN questions and the interview script"
             }
         }
@@ -187,7 +187,7 @@ class SalesConfiguration(BaseModel):
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemma-4-31b-it",
+                "default": "google_genai:gemini-3.5-flash-lite",
                 "description": "Free backup model used when a configured sales model is rate-limited or unavailable"
             }
         }

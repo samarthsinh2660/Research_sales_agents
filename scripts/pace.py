@@ -7,22 +7,24 @@ my leads", which is not an answer.
 
 Commands
     find     <query>   discover organizations from a search query or a listing URL
-    run      <target>  research one or more targets end to end
+    run      <target>  research a target, then draft the email (see --intent)
     leads              table of everything researched so far
     show     <name>    full report for one lead
     status             progress of a batch against a source URL
 
 Examples:
     python scripts/pace.py find "IT companies in Vadodara"
-    python scripts/pace.py run "Shital Infotech" --intent draft
+    python scripts/pace.py run "Shital Infotech"          # researches + drafts the email
     python scripts/pace.py run https://cio.economictimes.indiatimes.com/annual-conclave2025
     python scripts/pace.py leads --min-score 7
     python scripts/pace.py show "Rishabh Software"
 """
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -38,12 +40,27 @@ sys.path.insert(0, str(REPO / "src"))
 load_dotenv(dotenv_path=REPO / ".env")
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
-for _noisy in ("httpx", "langsmith", "google_genai", "urllib3", "langchain_core.tracers"):
+for _noisy in (
+    "httpx", "langsmith", "google_genai", "urllib3", "langchain_core.tracers",
+    # Emits "Error in LangChainTracer.on_llm_error callback: No indexed run ID ..." for
+    # every retried call. It reports that LangSmith could not index a trace, never that
+    # the research failed - but it buries the one line that matters under dozens of its own.
+    "langchain_core.callbacks.manager",
+    # The provider logs its own "Retrying ... as it raised 429" line per attempt; the CLI
+    # reports rate limiting once, in a form that says what to do about it.
+    "google.genai._api_client", "google_genai.models",
+):
     logging.getLogger(_noisy).setLevel(logging.ERROR)
+
+# LangSmith tracing is what produces the "No indexed run ID" storm, and a batch run has no
+# use for it. Opt back in with LANGSMITH_TRACING=true if a trace is actually wanted.
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+os.environ.setdefault("LANGSMITH_TRACING", "false")
 
 from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
+from agents.research.deep_researcher import deep_researcher  # noqa: E402
 from orchestrator.graph import build_unified_agent  # noqa: E402
 from orchestrator.state import Target  # noqa: E402
 from orchestrator.targets import _targets_from_page, parse_inline_list  # noqa: E402
@@ -51,11 +68,9 @@ from orchestrator.targets import _targets_from_page, parse_inline_list  # noqa: 
 console = Console()
 
 REPORTS_DIR = REPO / "src" / "agents" / "outreach" / "reports"
-LEDGER = REPO / ".batch_cache" / "leads.json"
+CACHE_DIR = REPO / ".batch_cache"
+LEDGER = CACHE_DIR / "leads.json"
 REPORT_SUFFIX = " - General Lead Research Report.txt"
-
-CLOUD = "google_genai:gemini-3.1-flash-lite"
-LOCAL = "ollama:qwen3:4b"
 
 # Captured from node updates as they stream past, because finish_target resets them all.
 CAPTURED_FIELDS = {
@@ -63,35 +78,30 @@ CAPTURED_FIELDS = {
     "contact_route", "recipient_name", "email_grounded", "unsupported_claims", "failures",
 }
 
-MODEL_KEYS = (
-    "research_model", "summarization_model", "compression_model", "final_report_model",
-    "research_sufficiency_model", "lead_scoring_model", "outreach_report_model", "email_model",
-)
-
 
 def build_config(args, intent: str | None = None) -> dict:
-    """Assemble runtime config from CLI flags, pointing every model at cloud or local."""
-    model = getattr(args, "model", None) or (LOCAL if getattr(args, "local", False) else CLOUD)
+    """Assemble runtime config from CLI flags.
+
+    Models are deliberately not set here. Configuration already picks them per role, and
+    overriding every role from the CLI meant a single flag silently replaced a considered
+    default with a weaker model - which is exactly what happened: the CLI pinned
+    gemini-3.1-flash-lite over the configured gemini-3.5-flash and made every run worse.
+    Change models in configuration.py or the environment, where the choice is recorded.
+    """
     configurable = {
-        "intent": intent or getattr(args, "intent", "research"),
+        "intent": intent or getattr(args, "intent", "draft"),
         "max_targets": getattr(args, "max_targets", 200),
         # Clarifying questions are only useful when someone is watching the terminal.
         "allow_clarification": getattr(args, "ask", False),
         "require_qualification": not getattr(args, "force", False),
-        "max_concurrent_research_units": getattr(args, "parallel", 1),
-        "max_researcher_iterations": getattr(args, "depth", 2),
-        **{key: model for key in MODEL_KEYS},
     }
-    if getattr(args, "threshold", None) is not None:
-        configurable["lead_score_threshold"] = args.threshold
     return {"recursion_limit": 100, "configurable": configurable}
 
 
 def add_run_flags(parser) -> None:
     """Add the flags shared by every command that actually runs the graph."""
-    parser.add_argument("--intent", default="research",
+    parser.add_argument("--intent", default="draft",
                         choices=["research", "qualify", "draft", "send"])
-    parser.add_argument("--model", help="override the model, e.g. google_genai:gemini-3.5-flash")
     parser.add_argument("--threshold", type=float, help="qualification score cutoff (default 7)")
     parser.add_argument("--force", action="store_true",
                         help="draft even if the lead scores below the threshold")
@@ -152,48 +162,144 @@ def report_path(name: str) -> Path:
     return REPORTS_DIR / f"{safe}{REPORT_SUFFIX}"
 
 
+def save_discovery_report(query: str, report: str) -> Path | None:
+    """Write a discovery report to disk, so the pass that produced it is not wasted.
+
+    Discovery runs a full research pass. Reading names out of the result and dropping the
+    report meant paying for research and keeping none of it, then researching the same
+    organizations again one by one.
+    """
+    if not report.strip():
+        return None
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^\w\-. ]", "_", query).strip()[:60]
+    path = REPORTS_DIR / f"{safe}{REPORT_SUFFIX}"
+    path.write_text(report)
+    return path
+
+
+async def targets_for_url(url: str, config: dict, request: str = "") -> list[Target]:
+    """Targets for a listing page, extracted once and cached.
+
+    Re-extracting on every run is not free and not stable: extraction quality follows
+    whichever model is configured, so a resume with --local reduced a 123-target page to
+    2 and then found nothing to resume from, because the names no longer matched the
+    reports on disk. The page's target list is a fact about the page, not about the run,
+    so it is captured once and reused.
+
+    The request is part of the cache key: extraction now returns only what was asked for,
+    so the same page yields a different list for "colleges" than for "recruiters", and
+    keying on the URL alone would serve one answer to the other question.
+    """
+    CACHE_DIR.mkdir(exist_ok=True)
+    stem = re.sub(r"[^\w]", "_", url)[:80]
+    if request.strip():
+        stem += "_" + hashlib.sha1(request.strip().lower().encode()).hexdigest()[:8]
+    cache = CACHE_DIR / f"{stem}.json"
+
+    if cache.exists():
+        targets = [Target(**t) for t in json.loads(cache.read_text())]
+        console.print(f"[dim]{len(targets)} targets (cached)[/dim]")
+        return targets
+
+    targets = await _targets_from_page(url, config, request)
+    if targets:
+        cache.write_text(json.dumps([t.model_dump() for t in targets], indent=2))
+    return targets
+
+
 ##########################
 # Commands
 ##########################
 
-async def cmd_find(args) -> None:
-    """Discover organizations from a listing URL, or from a search query."""
+async def discover(query: str, config: dict) -> tuple[list[Target], str]:
+    """Find organizations matching a request, using the research agent.
+
+    A single search page is not an answer to "the top 10 engineering colleges": the page
+    that ranks first is usually one college's own marketing page, which lists itself at
+    number one and pads the rest with its recruiters. The research agent searches several
+    sources and reconciles them, which is the job it already does well - so discovery asks
+    it, rather than reimplementing a worse version of it.
+
+    Args:
+        query: What to find, e.g. "top 10 engineering colleges in Dehradun"
+        config: Runtime configuration
+
+    Returns:
+        (targets named in the findings, the research report itself)
+    """
+    from orchestrator.targets import _extract_targets
+
+    console.print(f"[dim]researching: {query}[/dim]")
+    result = await deep_researcher.ainvoke(
+        {"messages": [("user",
+            f"{query}. For each organization give its name, what it is, and how to contact "
+            "it - a published email, the relevant office, or its contact page. Only include "
+            "organizations that match the request."
+        )]},
+        config,
+    )
+    report = result.get("final_report", "")
+    if not report.strip():
+        return [], ""
+
+    targets = await _extract_targets(report, query, config, query)
+    return targets, report
+
+
+async def cmd_find(args) -> tuple[list[Target], str]:
+    """Discover organizations, show them, and return them with any research report."""
     config = build_config(args, intent="research")
-    url = args.query if args.query.startswith("http") else None
+    report = ""
 
-    if not url:
-        import os
+    if args.query.startswith("http"):
+        targets = await targets_for_url(args.query, config, "")
+    else:
+        targets, report = await discover(args.query, config)
 
-        from tavily import AsyncTavilyClient
-
-        console.print(f"[dim]searching for: {args.query}[/dim]")
-        client = AsyncTavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
-        found = await client.search(args.query, max_results=5, search_depth="advanced")
-        results = found.get("results", [])
-        if not results:
-            console.print("[red]nothing found[/red]")
-            return
-        # Directory pages list many companies at once, so they beat a single company site
-        # as a starting point; the first result is the fallback when none look like one.
-        url = next(
-            (r["url"] for r in results if re.search(r"top|list|director|best", r["title"], re.I)),
-            results[0]["url"],
-        )
-        console.print(f"[dim]best listing page: {url}[/dim]")
-
-    targets = await _targets_from_page(url, config)
     if not targets:
-        console.print("[red]no organizations extracted[/red]")
-        return
+        console.print("[red]nothing found[/red]")
+        return [], report
 
     table = Table(title=f"{len(targets)} found", header_style="bold cyan")
     table.add_column("#", width=4)
     table.add_column("Name")
-    table.add_column("Context", overflow="fold")
-    for i, t in enumerate(targets[:args.limit], 1):
+    table.add_column("What it is", overflow="fold")
+    for i, t in enumerate(targets[:args.limit or len(targets)], 1):
         table.add_row(str(i), t.name, (t.context or "")[:60])
     console.print(table)
-    console.print(f'[dim]research these with: pace.py run "{url}"[/dim]')
+    return targets, report
+
+
+def configured_research_model() -> str:
+    """Return the research model the code is configured to use, not a CLI override."""
+    from agents.research.configuration import Configuration
+    return Configuration().research_model
+
+
+async def check_model_available(model: str) -> str | None:
+    """Return a human-readable reason the model cannot be used, or None if it is fine.
+
+    Checked once before a batch rather than discovered target by target. An exhausted
+    daily quota still "works" - every call retries, falls back, and limps on at a fraction
+    of the speed - so without an upfront check a run looks alive while producing far worse
+    research than it should.
+    """
+    if model.startswith("ollama:"):
+        return None
+    try:
+        from langchain.chat_models import init_chat_model
+        await init_chat_model(
+            model, api_key=os.getenv("GOOGLE_API_KEY"), max_retries=0
+        ).ainvoke("ok")
+        return None
+    except Exception as e:
+        text = str(e)
+        if "RESOURCE_EXHAUSTED" in text or "429" in text:
+            return "daily quota exhausted"
+        if "UNAVAILABLE" in text or "503" in text:
+            return "model temporarily unavailable"
+        return type(e).__name__
 
 
 async def run_target(graph, target: Target, config: dict) -> dict:
@@ -228,14 +334,20 @@ async def run_target(graph, target: Target, config: dict) -> dict:
         payload = Command(resume=answer_interrupt(first))
 
 
-async def cmd_run(args) -> None:
-    """Research targets end to end, one graph invocation each so progress is checkpointed."""
+async def cmd_run(args, targets: list[Target] | None = None) -> None:
+    """Research targets end to end, one graph invocation each so progress is checkpointed.
+
+    Args:
+        args: Parsed CLI flags
+        targets: Already-resolved targets, so discovery does not have to be redone
+    """
     config = build_config(args)
 
-    if args.target.startswith("http"):
-        targets = await _targets_from_page(args.target, config)
-    else:
-        targets = [Target(name=n, source="inline") for n in parse_inline_list(args.target)]
+    if targets is None:
+        if args.target.startswith("http"):
+            targets = await targets_for_url(args.target, config, "")
+        else:
+            targets = [Target(name=n, source="inline") for n in parse_inline_list(args.target)]
 
     if args.resume:
         before = len(targets)
@@ -247,14 +359,29 @@ async def cmd_run(args) -> None:
         console.print("[green]nothing to do[/green]")
         return
 
-    where = args.model or ("local qwen3:4b" if args.local else "cloud")
     notes = []
     if args.force:
         notes.append("ignoring score gate")
     if args.ask:
         notes.append("clarifying questions on")
     suffix = f" ({', '.join(notes)})" if notes else ""
-    console.print(f"[bold]{len(targets)} target(s), intent={args.intent}, {where}{suffix}[/bold]\n")
+    console.print(f"[bold]{len(targets)} target(s) - "
+                  f"{MODE_LABELS.get(args.intent, args.intent)}{suffix}[/bold]")
+
+    problem = await check_model_available(configured_research_model())
+    if problem:
+        console.print(Panel(
+            f"[bold]{configured_research_model()}[/bold]\n{problem}\n\n"
+            "It would still run - every call retries, falls back to a weaker model and\n"
+            "limps on - but the research would be far worse than it should be.\n\n"
+            "[dim]Wait for the daily quota to reset, or change the model in\n"
+            "src/agents/research/configuration.py[/dim]",
+            title="[red]model not usable right now[/red]", border_style="red",
+        ))
+        reply = console.input("[bold yellow]run anyway? [y/N][/bold yellow] ").strip().lower()
+        if reply not in ("y", "yes"):
+            return
+    console.print()
 
     # A checkpointer is what makes interrupt() resumable, so send approval and clarifying
     # questions can pause the run and come back with the operator's answer.
@@ -394,13 +521,32 @@ def cmd_status(args) -> None:
 # Interactive session
 ##########################
 
+# "intent" is the config field name, but it tells a user nothing about what will happen.
+# The CLI talks in outcomes instead and translates at the edge, so the graph keeps one
+# vocabulary and the person at the terminal gets another.
+MODE_LABELS = {
+    "research": "research only - no email written",
+    "qualify": "research + score the fit",
+    "draft": "write the email, save as draft - nothing sent",
+    "send": "write and send - asks you first",
+}
+
+# What someone is likely to type for each mode, rather than the internal name.
+MODE_ALIASES = {
+    "research": "research", "info": "research", "learn": "research", "only": "research",
+    "qualify": "qualify", "score": "qualify",
+    "draft": "draft", "email": "draft", "mail": "draft", "write": "draft",
+    "send": "send",
+}
+
+
 class Settings(argparse.Namespace):
     """Mutable session settings, shaped like parsed args so build_config takes either."""
 
     def __init__(self):
         """Start from the defaults a session is most likely to want."""
         super().__init__(
-            intent="draft", model=None, local=False, threshold=None, force=False,
+            intent="draft", threshold=None, force=False,
             ask=False, depth=2, parallel=1, max_targets=200, limit=0, resume=False,
             min_score=0, qualified=False, full=False,
         )
@@ -408,8 +554,7 @@ class Settings(argparse.Namespace):
     def as_rows(self):
         """Return the current settings, ordered for display."""
         return [
-            ("intent", self.intent, "how far to go: research / qualify / draft / send"),
-            ("model", self.model or ("qwen3:4b (local)" if self.local else "cloud default"), "which model runs everything"),
+            ("mode", MODE_LABELS.get(self.intent, self.intent), "what the agent does with each target"),
             ("threshold", self.threshold if self.threshold is not None else "7.0 (default)", "score needed to qualify"),
             ("force", self.force, "draft even below the threshold"),
             ("ask", self.ask, "let the agent ask clarifying questions"),
@@ -419,26 +564,77 @@ class Settings(argparse.Namespace):
 
 
 HELP = """
-[bold]Just type a company name[/bold] to research it with the current settings.
-  acme corp                      research/outreach one target
-  Acme, Globex, Initech          several at once
-  https://site.com/speakers      extract targets from a page, then run them
+[bold cyan]WHAT YOU CAN TYPE[/bold cyan]
 
-[bold]Slash commands[/bold]
-  /config                        show every setting
-  /intent <research|qualify|draft|send>
-  /model <name>                  e.g. google_genai:gemini-3.5-flash
-  /local                         toggle the local qwen3:4b model
-  /threshold <n>                 qualification cutoff
-  /force                         toggle drafting below the threshold
-  /ask                           toggle clarifying questions
-  /depth <n>                     research iterations
-  /find <query>                  discover companies, e.g. /find IT companies in Vadodara
-  /leads [minscore]              table of everything researched
-  /status                        counts
+  [bold]A company name[/bold] - runs the pipeline on it
+     [dim]Rishabh Software[/dim]
+
+  [bold]Several names[/bold], comma separated
+     [dim]Rishabh Software, Prakash Software, Spaculus[/dim]
+
+  [bold]A link[/bold] - pulls every organization and person off the page, then runs them
+     [dim]https://cio.economictimes.indiatimes.com/annual-conclave2025[/dim]
+     Works on event pages, speaker lists and company directories.
+
+  [bold]A request to find organizations[/bold] - discovers them, then offers to run them
+     [dim]find all the colleges in Dehradun we can sell PACE to[/dim]
+     [dim]list IT companies in Vadodara[/dim]
+     Start with find/list/search and say where. One step, no link to copy.
+
+  [bold]@name[/bold] - show one lead you already researched
+     [dim]@rishabh[/dim]
+
+[bold cyan]WHAT IT DOES WITH EACH ONE - /mode[/bold cyan]
+
+  Each mode includes everything above it.
+
+  [bold]research[/bold]   find out who they are and how to reach them. No email written.
+  [bold]score[/bold]      also score how well they fit PACE, and pick the right track
+  [bold]email[/bold]      also write the email and save it as a Gmail draft.
+             [dim]Nothing is sent. This is the default.[/dim]
+  [bold]send[/bold]       also send it - shows you the full email and asks first
+
+  [dim]/mode email[/dim]   [dim](or research / score / send)[/dim]
+
+[bold cyan]SETTINGS - change any time, they stick[/bold cyan]
+
+  /config              show everything and what it means
+  /mode <what>         research | score | email | send
+  /threshold <n>       score needed to qualify (default 7)
+  /force               write the email even if the lead scores low
+  /depth <n>           research rounds per target. 1 = fast/shallow,
+                       2 = default, 3+ = deeper and much more expensive
+  /ask                 let the agent ask you questions while it works
+
+[bold cyan]OTHER COMMANDS[/bold cyan]
+
+  /find <what and where>   discover companies
+                           [dim]/find IT companies in Vadodara[/dim]
+  /leads [minscore]        table of everything researched
+  /status                  counts
   /help  /exit
 
-[bold]@lead[/bold]  show one lead, e.g. [dim]@rishabh[/dim]
+[bold cyan]TYPICAL SESSIONS[/bold cyan]
+
+  [bold]Just tell me about them[/bold]
+     /mode research
+     Rishabh Software
+
+  [bold]Find who to contact and write the mail[/bold]
+     /mode email
+     Rishabh Software
+     [dim]-> finds the contact, writes the email, saves a Gmail draft[/dim]
+
+  [bold]Work a whole event page[/bold]
+     /mode research
+     https://some-conference.com/speakers
+
+  [bold]Prospect a city, start to finish[/bold]
+     find engineering colleges in Dehradun
+     [dim]-> lists them, asks "research these now?", then runs them[/dim]
+
+[dim]An email is only drafted when a real published address was found. If none was
+published you'll see "no address" - the agent never invents one.[/dim]
 """
 
 
@@ -451,7 +647,80 @@ def show_config(settings: Settings) -> None:
     for name, value, meaning in settings.as_rows():
         table.add_row(name, str(value), meaning)
     console.print(table)
-    console.print("[dim]change with /intent draft, /model ..., /force[/dim]")
+    console.print("[dim]change with /mode email, /threshold 6, /force[/dim]")
+
+
+# A request to discover organizations rather than a list of names to research, so
+# "find all the colleges we can sell PACE to" works as typed instead of being split on
+# commas into nonsense target names. The \b matters: it keeps a company actually called
+# "Finder Technologies" being treated as a name, not a search.
+_DISCOVERY_VERB = re.compile(r"^\s*(find|search|discover|list|get|show)\b", re.IGNORECASE)
+
+# A place to search. Without one the search has nothing to narrow on, so the user is asked.
+_LOCATION_HINT = re.compile(r"\b(in|near|around|across|from|at)\b\s+\w", re.IGNORECASE)
+
+
+def looks_like_discovery(line: str) -> bool:
+    """Whether a plain-text line is asking to find organizations, not naming them.
+
+    Deliberately does not require a location: "find all the colleges we can sell PACE to"
+    is plainly a search, and refusing it because it lacks "in Dehradun" would send it down
+    the name-parsing path and produce nonsense targets. The location is asked for instead.
+    """
+    if line.startswith("http") or not _DISCOVERY_VERB.match(line):
+        return False
+    return len(line.split()) >= 3
+
+
+def needs_location(line: str) -> bool:
+    """Whether a discovery request has no place to search in."""
+    return not _LOCATION_HINT.search(line)
+
+
+async def find_and_run(query: str, settings: Settings) -> None:
+    """Discover organizations and research them, as one step.
+
+    No confirmation between the two: asking "run these now?" adds a decision without
+    adding information, since the request already said what was wanted and extraction
+    now returns only that. Ctrl-C stops a run that is going the wrong way.
+    """
+    if needs_location(query):
+        where = console.input(
+            "[bold cyan]where should I look?[/bold cyan] [dim](e.g. Dehradun, Uttarakhand)[/dim] "
+        ).strip()
+        if not where:
+            console.print("[yellow]need a place to search - try: find colleges in Dehradun[/yellow]")
+            return
+        query = f"{query} in {where}"
+
+    args = Settings()
+    args.__dict__.update(settings.__dict__)
+    args.query, args.limit = query, 30
+
+    targets, report = await cmd_find(args)
+    if not targets:
+        return
+
+    if settings.intent == "research":
+        # The discovery pass already researched these and wrote a report covering all of
+        # them. Researching each one again would pay roughly ten times over for the same
+        # question, and the report - the thing actually asked for - used to be discarded.
+        saved = save_discovery_report(query, report)
+        if saved:
+            # The path, not a `show` command: `show` reads the per-lead ledger, and a
+            # discovery report covers many organizations rather than being one lead.
+            console.print(f"\n[green]report saved:[/green] {saved}")
+            console.print(f"[dim]{len(report.splitlines())} lines - open it, or: cat \"{saved}\"[/dim]")
+        else:
+            console.print("[yellow]no report was produced[/yellow]")
+        return
+
+    # Deeper modes need per-organization work - each one's own contact, score and email -
+    # so here the fan-out earns its cost.
+    run_args = Settings()
+    run_args.__dict__.update(settings.__dict__)
+    run_args.resume = True
+    await cmd_run(run_args, targets=targets)
 
 
 async def handle_slash(line: str, settings: Settings) -> bool:
@@ -466,19 +735,15 @@ async def handle_slash(line: str, settings: Settings) -> bool:
         console.print(HELP)
     elif cmd == "config":
         show_config(settings)
-    elif cmd == "intent":
-        if rest in ("research", "qualify", "draft", "send"):
-            settings.intent = rest
-            console.print(f"[green]intent = {rest}[/green]")
+    elif cmd in ("mode", "intent"):
+        chosen = MODE_ALIASES.get(rest.lower())
+        if chosen:
+            settings.intent = chosen
+            console.print(f"[green]mode = {MODE_LABELS[chosen]}[/green]")
         else:
-            console.print("[red]usage: /intent research|qualify|draft|send[/red]")
-    elif cmd == "model":
-        settings.model = rest or None
-        console.print(f"[green]model = {settings.model or 'default'}[/green]")
-    elif cmd == "local":
-        settings.local = not settings.local
-        settings.model = None
-        console.print(f"[green]local = {settings.local}[/green]")
+            console.print("[red]usage: /mode research | score | email | send[/red]")
+            for name, label in MODE_LABELS.items():
+                console.print(f"  [bold]{name:9}[/bold] [dim]{label}[/dim]")
     elif cmd == "threshold":
         try:
             settings.threshold = float(rest)
@@ -499,11 +764,9 @@ async def handle_slash(line: str, settings: Settings) -> bool:
             console.print("[red]usage: /depth 3[/red]")
     elif cmd == "find":
         if not rest:
-            console.print("[red]usage: /find IT companies in Vadodara[/red]")
+            console.print("[red]usage: /find engineering colleges in Dehradun[/red]")
         else:
-            args = Settings()
-            args.query, args.limit = rest, 30
-            await cmd_find(args)
+            await find_and_run(rest, settings)
     elif cmd == "leads":
         args = Settings()
         args.min_score = float(rest) if rest else 0
@@ -523,8 +786,12 @@ async def cmd_repl(_args) -> None:
     """
     settings = Settings()
     console.print(Panel(
-        "[bold]PACE outreach[/bold]\n"
-        "Type a company name to research it. [dim]/help for commands, /exit to quit.[/dim]",
+        "[bold]PACE outreach[/bold]\n\n"
+        "Type a [bold]company name[/bold], a [bold]list of names[/bold], or a [bold]link[/bold] to an event or "
+        "directory page.\n"
+        f"Right now I will: [bold]{MODE_LABELS[settings.intent]}[/bold]\n"
+        "[dim]change that with /mode[/dim]\n\n"
+        "[dim]/help for everything you can do  ·  /config for settings  ·  /exit to quit[/dim]",
         border_style="cyan",
     ))
 
@@ -549,6 +816,13 @@ async def cmd_repl(_args) -> None:
             cmd_show(args)
             continue
 
+        if looks_like_discovery(line):
+            try:
+                await find_and_run(line, settings)
+            except Exception as e:
+                console.print(f"[red]error:[/red] {str(e)[:200]}")
+            continue
+
         args = Settings()
         args.__dict__.update(settings.__dict__)
         args.target = line
@@ -560,7 +834,6 @@ async def cmd_repl(_args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="PACE outreach pipeline")
-    parser.add_argument("--local", action="store_true", help="use local qwen3:4b instead of cloud")
     # Not required: bare `pace.py` opens the interactive session, which is the usual way in.
     sub = parser.add_subparsers(dest="command")
 

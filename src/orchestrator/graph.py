@@ -45,6 +45,7 @@ from agents.outreach.utils import (
     save_reports_locally,
 )
 from agents.research.deep_researcher import deep_researcher
+from agents.research.entity_registry import get_sales_context
 from orchestrator.configuration import INTENT_DEPTH, AgentConfiguration, OutreachIntent
 from orchestrator.state import AgentInputState, AgentState, Target
 from orchestrator.targets import resolve_targets
@@ -344,8 +345,11 @@ async def score_target(state: AgentState, config: RunnableConfig) -> Command[Lit
     agent_cfg = AgentConfiguration.from_runnable_config(config)
     target: Target = state["current_target"]
 
-    subject = state.get("final_report", "")
-    if state.get("entity_type") == "person":
+    # Score against an offer that applies to this kind of organization. Judging a college
+    # by the company tracks rates it badly for a reason that cannot apply to it.
+    entity_type = state.get("entity_type") or ""
+    subject = f"{get_sales_context(entity_type)}\n\n# Research report\n\n{state.get('final_report', '')}"
+    if entity_type == "person":
         subject = (
             "Score the partnership fit of the EMPLOYER of this person, not the "
             f"individual.\n\n{subject}"
@@ -432,14 +436,14 @@ async def generate_materials(state: AgentState, config: RunnableConfig) -> Comma
         f"recipient={route.recipient_name or '(none named)'} {route.recipient_role}"
     )
 
-    brief = []
+    brief = [get_sales_context(state.get("entity_type") or "")]
     if state.get("lead_track"):
         brief.append(f"Recommended partner track: {state['lead_track']}")
     if state.get("lead_angle"):
         brief.append(f"Opening angle to use: {state['lead_angle']}")
     if route.recipient_name:
         brief.append(f"Address this person: {route.recipient_name} ({route.recipient_role})")
-    guidance = "\n".join(brief) or "No specific recipient or angle was identified."
+    guidance = "\n\n".join(brief)
 
     email = await invoke_llm(
         system_prompt=PERSONALIZE_EMAIL_PROMPT,
