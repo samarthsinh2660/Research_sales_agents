@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from agents.outreach.state import Report, override_reducer
+from agents.research.state import ContactCard
 
 ###################
 # Structured Outputs
@@ -98,6 +99,7 @@ class AgentState(TypedDict):
     lead_track: str
     lead_reasoning: str
     lead_angle: str
+    contact_card: ContactCard | None
     contact_route: str
     recipient_name: str
     email_grounded: bool
@@ -113,5 +115,5 @@ PER_TARGET_FIELDS = {
     "research_retry_count", "lead_score", "lead_qualified", "reports",
     "outreach_report_link", "send_approved",
     "lead_track", "lead_reasoning", "lead_angle",
-    "contact_route", "recipient_name", "email_grounded", "unsupported_claims",
+    "contact_card", "contact_route", "recipient_name", "email_grounded", "unsupported_claims",
 }

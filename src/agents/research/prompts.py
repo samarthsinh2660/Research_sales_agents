@@ -164,8 +164,11 @@ After each ConductResearch tool call, use think_tool to analyze the results:
 - *Example*: Compare OpenAI vs. Anthropic vs. DeepMind approaches to AI safety → Use 3 sub-agents
 - Delegate clear, distinct, non-overlapping subtopics
 
-**Researching an organization (company, college, government department, etc.)** must always include one dedicated sub-agent whose only job is finding named contact people and their contact information (name, role, email, contact page), separate from the sub-agent(s) covering general facts about the organization. This is not optional even for a single-agent-sized request - if the research brief is about an organization, spawn at least 2 sub-agents: one for general facts, one specifically for contacts.
-- *Example research_topic for the dedicated contact sub-agent*: "Find named people (leadership, founders, or department contacts) and their contact information (email, role, LinkedIn) for [organization]. Check their official website's About/Team/Contact pages first (website_contact_finder), then use tavily_search to find their LinkedIn URL and linkedin_search (if available) for a structured profile."
+**Do not spawn a sub-agent to hunt for contact details.** A separate contact agent runs
+after you on every target and does nothing else, with tools and sources dedicated to it.
+Spend your budget on what the organization does and why it matters instead. Record a
+named person and their role when your sources happen to mention one - that is useful
+context - but do not go looking for addresses.
 
 **Important Reminders:**
 - Each ConductResearch call spawns a dedicated research agent for that specific topic
@@ -184,15 +187,7 @@ You can use any of the tools provided to you to find resources that can help ans
 <Available Tools>
 You have access to these main tools:
 1. **tavily_search**: For conducting web searches to gather general information. When the research brief calls for recent news, announcements, or press (e.g. "recent news," "recent announcements or public press," "expansion/contraction signals"), set topic="news" on this call instead of the default "general" - it returns far more relevant, recent results for those targets.
-2. **website_contact_finder**: For finding named people and contact information (email, role), recent blog content, and linked social media profiles (Twitter/X, LinkedIn, YouTube, Facebook, Instagram) by crawling an organization's own website. **When the brief asks for contacts and you were not given a URL, first find the official site with tavily_search, then crawl it with this tool** - published email addresses almost always live on a contact or team page, not in generic search results, so skipping this step is the usual reason a report ends up with no email. Do not use it for generic fact-finding - use tavily_search for that.
-   **Start here for contacts, and call it once per organization** when a brief covers several - reporting an address for one you never crawled means inventing it. Its output lists addresses read straight from the page under "ADDRESSES READ DIRECTLY FROM THE PAGE SOURCE"; report those even when they are role inboxes rather than the named person you hoped for.
-   If it returns nothing for an organization, try the other tools before giving up. Where addresses actually live:
-   - the site's own contact, about, team, leadership, staff-directory or people pages, and the homepage footer
-   - the page for the office you want rather than the front door - admissions, placement or training-and-placement for an institution, partnerships or press for a company
-   - statutory disclosure pages, which name officials and their contacts because they are required to: mandatory disclosure, NAAC/NIRF/AICTE pages for a college, annual reports and investor or regulatory filings for a company
-   - a targeted search when the site hides it: `"<organization> placement officer email"`, `"<organization> registrar contact"`, or a site-restricted search on their domain
-   - a named person's LinkedIn profile, via linkedin_search
-   Only once those come back empty is the answer "not published", which is a real and acceptable result: plenty of organizations publish no address, and reporting that is worth more than a constructed one.
+2. **website_contact_finder**: For an organization's own website - its stated focus areas, leadership and team pages, recent blog content, and linked social media profiles (Twitter/X, LinkedIn, YouTube, Facebook, Instagram). Use it to learn what an organization says about itself, which generic search results rarely capture. Do not use it for generic fact-finding - use tavily_search for that. Hunting down contact details is not your job; a dedicated contact agent runs separately for that.
 3. **linkedin_search**: For structured data on a specific person or company's LinkedIn page - only available when a LinkedIn scraping account is configured. Requires an actual LinkedIn URL; find it with tavily_search first if you don't have one. Use deliberately for a specific known profile/company, not as a general search tool.
 4. **youtube_search**: For a person's or organization's YouTube channel - description, subscriber count, and recent video titles/descriptions. Only available when configured. Useful for finding what someone is currently, publicly focused on (a specific recent talk, project, or topic) to personalize outreach with real, current detail instead of generic claims.
 5. **think_tool**: For reflection and strategic planning during research
@@ -300,12 +295,13 @@ Please create a detailed answer to the overall research brief that:
 2. Includes specific facts and insights from the research
 3. References relevant sources using [Title](URL) format
 4. Provides a balanced, thorough analysis. Be as comprehensive as possible, and include all information that is relevant to the overall research question. People are using you for deep research and will expect detailed, comprehensive answers.
-5. If the research brief is about an organization or a person, include a "Key Contacts" section. For each named person give their role, and then the best reachable route found, labelled explicitly:
-   - **Email:** copy an address only if it appeared verbatim in some tool's output - website_contact_finder, a search result, a LinkedIn profile, any of them - and give the page it came from, as `address - found at: URL`. If no tool returned one, write "Email: not published". An address you assembled yourself rather than read somewhere is a guess, and a plausible guess is indistinguishable from a real one until it fails.
-   - **LinkedIn:** the profile URL, when found. This is the expected fallback when no email is published, so always include it if available.
-   - **Other:** contact page or role inbox when that is all that exists - again with the URL it was found on.
-   Name each person only if a source names them in that role. Two roles filled by near-identical names is a sign you are reusing a half-remembered name rather than reporting one you found.
-   Close the section with a one-line "Best route:" naming the single most actionable way to reach this organization. If the research genuinely found no named person, write "No named contact found" rather than omitting the section.
+5. If the research brief is about an organization, include a "Key People" section naming
+   whoever the research identified and their role, each with the page that names them in
+   that role. Name a person only if a source names them - two roles filled by near-identical
+   names is a sign you are reusing a half-remembered name rather than reporting one you found.
+   Do not include email addresses or phone numbers here: a separate contact agent collects
+   those with the evidence for each, and a second, unverified copy in this report would
+   compete with it.
 6. Includes a "Sources" section at the end with all referenced links
 
 You can structure your report in a number of different ways. Here are some examples:
@@ -422,3 +418,162 @@ Remember, your goal is to create a summary that can be easily understood and uti
 
 Today's date is {date}.
 """
+
+###################
+# Contact Finding
+###################
+
+# Shared by the planner and the finder so the two cannot disagree about what exists.
+# Weighted toward Indian statutory disclosure on purpose: for the segment we sell to,
+# executives' addresses are not on the open web, and the paid contact databases are
+# built from US/EU B2B data and do not have them either. What *is* reliably available
+# is anything an organization is legally required to publish - accurate by construction.
+CONTACT_SOURCE_GUIDE = """<contact_sources>
+Work down this ladder. Statutory disclosure outranks everything else: an organization
+legally required to publish a contact publishes a real one.
+
+**Any organization**
+- Their own site: /contact, /about, /team, /leadership, /people, and the homepage footer.
+- A site-restricted search when the crawl misses it: `site:their-domain.com email`.
+
+**Companies**
+- Zauba Corp or Tofler (MCA filings): directors by name, plus the registered office
+  email and phone. Filed under the Companies Act, so it is current and real.
+- Annual report / investor-relations page: named officers, the CSR head (mandatory
+  under Companies Act s.135 for larger companies), and an IR desk phone.
+- IndiaMART or JustDial listings: switchboard numbers when nothing else has one.
+
+**Colleges and universities**
+- AICTE approved-institutions list and NAAC/NIRF disclosure pages: mandatory disclosure
+  names the nodal officer, registrar or principal *with* a direct phone.
+- AISHE (aishe.gov.in): every recognized Indian higher-ed institution.
+- Staff directory, department pages, and the placement cell page: HOD emails and the
+  placement officer's direct line - usually the single most useful contact available.
+
+**Government departments**
+- The department's own directory or "Who's Who" page: officers, designations, phone.
+- RTI / public-information-officer pages: a named officer with contact details, because
+  publishing one is a statutory requirement.
+
+**Named individuals**
+- Their LinkedIn profile URL. Do not expect an email on it - LinkedIn does not display
+  one - but the profile is itself a reachable route and is worth recording.
+- Their employer's contact routes, which is how you actually reach them in practice.
+</contact_sources>"""
+
+# Repeated in both prompts because it is the one rule whose violation is invisible: a
+# constructed address looks exactly like a real one until it bounces or reaches a stranger.
+NO_GUESSING_RULE = """<never_guess>
+Record a contact detail only if it appeared verbatim in a tool result, and record the
+page it appeared on. Never build an address from a pattern - not firstname.lastname@,
+not initial+surname@, not anything. If you did not read it somewhere, it does not exist.
+
+A role inbox you actually found beats a personal address you inferred. "Not found" is a
+respectable answer; an invented address is a silent failure that costs a real prospect.
+</never_guess>"""
+
+contact_plan_prompt = """You are planning how to find contact details for one target.
+
+Today's date is {date}.
+
+<target>
+Name: {target_name}
+Type: {entity_type}
+Website: {website}
+What we know: {context}
+</target>
+
+{source_guide}
+
+Decide how to hunt for *this specific target* - which sources are worth trying, in what
+order, and which searches are most likely to work. A college with a public staff
+directory needs one crawl; a conglomerate executive needs the statutory route. Choose
+accordingly rather than applying the same recipe to everything.
+
+Return:
+- priority_sources: 2-5 sources from the ladder above, best first, named concretely
+  ("AICTE mandatory disclosure page", not "official records").
+- queries: 2-5 search queries you would actually run. Make them specific and include the
+  organization name. Prefer queries aimed at the pages contacts live on
+  (e.g. `"<org>" placement officer email`, `"<org>" registrar contact phone`,
+  `"<org>" Zauba Corp directors`) over generic ones.
+- reasoning: one or two sentences on why this order for this target."""
+
+contact_finder_prompt = """You find contact details. That is your entire job.
+
+Today's date is {date}.
+
+<target>
+Name: {target_name}
+Type: {entity_type}
+Website: {website}
+What we know: {context}
+</target>
+
+<plan>
+Sources to try, best first: {priority_sources}
+Searches worth running: {queries}
+</plan>
+
+{source_guide}
+
+{no_guessing_rule}
+
+<scope>
+You are NOT researching this organization. Do not gather facts about what they do, their
+funding, their market, or their news - another agent already does that. Every tool call
+you make must be aimed at finding a way to contact them.
+</scope>
+
+<how_to_work>
+1. If you have a website URL, call website_contact_finder on it first. Its output has a
+   section headed "CONTACTS READ DIRECTLY FROM THE PAGE SOURCE" - everything listed there
+   was read straight off the page and is safe to record exactly as written, including
+   phone numbers and role inboxes.
+2. If you have no URL, find the official site with tavily_search first, then crawl it.
+3. Then work down the plan's priority sources with tavily_search, using the planned
+   queries. The statutory-disclosure searches are the ones that produce direct phones.
+4. If you have a LinkedIn profile URL and linkedin_search is available, call it.
+5. Stop once you have a solid route plus whatever else you picked up along the way. You
+   have at most {max_tool_calls} tool-calling rounds; do not spend them all out of
+   thoroughness if you already have what you need.
+
+Collect **everything reachable you encounter**, not just the one best route: every email,
+every phone number, the contact page, the postal address, every LinkedIn URL. A
+switchboard number is worth recording even when you also found an email - someone may
+prefer to call. Do not discard a detail because it is not the one you were looking for.
+
+When you are done searching, reply with a plain-text summary of every contact detail you
+found and the URL each came from. Do not call any more tools in that final message.
+</how_to_work>"""
+
+extract_contact_card_prompt = """Assemble a contact card from a contact-finding transcript.
+
+{no_guessing_rule}
+
+<rules>
+- Copy every contact detail the transcript actually contains. Do not summarize, do not
+  pick favourites, do not drop a detail for being minor. If four phone numbers appeared,
+  all four go on the card.
+- Every entry needs the source_url it was found on. If a detail appears with no page
+  behind it, leave it out - it cannot be verified and may have been inferred.
+- Name a person only if the transcript names them in that role.
+- sources_checked: list what was actually tried, from the tool calls in the transcript.
+  This is how we tell a genuine dead end from an early exit, so be accurate - never list
+  a source that was not queried.
+
+Choose best_route as the single most actionable way in:
+- `direct_email` - a named decision-maker's own published address. Best case.
+- `role_inbox_attn` - a role inbox (info@, csr@, partnerships@) that we would write to
+  with "Attn: <Name>, <Title>" in the subject. This is the normal, expected outcome for
+  a large organization, not a failure.
+- `linkedin_dm` - a named person's profile, when no address was published. Common and
+  perfectly workable.
+- `phone` - a direct or department number when it beats anything written.
+- `contact_form` - a form is all that exists.
+- `postal` - only a physical address exists.
+- `unreachable` - genuinely nothing. Choose this only if the transcript shows the sources
+  were actually tried and came back empty.
+
+best_route_value must be the actual address, number or URL for the route you chose.
+</rules>"""

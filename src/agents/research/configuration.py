@@ -117,6 +117,31 @@ class Configuration(BaseModel):
             }
         }
     )
+    max_contact_tool_calls: int = Field(
+        default=6,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "slider",
+                "default": 6,
+                "min": 2,
+                "max": 15,
+                "step": 1,
+                "description": "Hard cap on tool-calling rounds for the contact agent. Kept well below max_react_tool_calls on purpose: contact finding looks for details on known pages, and must stay cheap enough to run on every target."
+            }
+        }
+    )
+    min_contact_sources_checked: int = Field(
+        default=3,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "number",
+                "default": 3,
+                "min": 1,
+                "max": 10,
+                "description": "How many sources the contact agent must try before an empty result counts as genuinely unreachable rather than as giving up early."
+            }
+        }
+    )
     # Model Configuration
     summarization_model: str = Field(
         default="google_genai:gemini-3.5-flash-lite",

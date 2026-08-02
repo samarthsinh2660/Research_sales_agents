@@ -44,14 +44,18 @@ from agents.outreach.utils import (
     research_sufficiency_decision,
     save_reports_locally,
 )
+from agents.research.configuration import Configuration
+from agents.research.contact_agent import contact_agent
 from agents.research.deep_researcher import deep_researcher
 from agents.research.entity_registry import get_sales_context
+from agents.research.state import ContactCard
 from orchestrator.configuration import INTENT_DEPTH, AgentConfiguration, OutreachIntent
 from orchestrator.state import AgentInputState, AgentState, Target
 from orchestrator.targets import resolve_targets
 
 RESEARCH_REPORT_TITLE = "General Lead Research Report"
 EMAIL_REPORT_TITLE = "Personalized Email"
+CONTACT_CARD_TITLE = "Contact Card"
 
 # Cleared when a target ends, however it ends. Shared by the normal path and the failure
 # path so the two cannot drift: a field reset in one but not the other would leak that
@@ -70,6 +74,7 @@ PER_TARGET_RESET: dict = {
     "lead_track": "",
     "lead_reasoning": "",
     "lead_angle": "",
+    "contact_card": None,
     "contact_route": "",
     "recipient_name": "",
     "email_grounded": False,
@@ -288,7 +293,7 @@ async def prepare_research(state: AgentState, config: RunnableConfig) -> Command
     return Command(goto="research", update={"messages": [HumanMessage(content=query)]})
 
 
-async def check_research_sufficiency(state: AgentState, config: RunnableConfig) -> Command[Literal["score_target", "prepare_research", "finish_target"]]:
+async def check_research_sufficiency(state: AgentState, config: RunnableConfig) -> Command[Literal["find_target_contacts", "prepare_research", "finish_target"]]:
     """Gate on whether research has enough substance to act on.
 
     Args:
@@ -299,7 +304,6 @@ async def check_research_sufficiency(state: AgentState, config: RunnableConfig) 
         Command to score, retry research, or stop with this target
     """
     sales_cfg = SalesConfiguration.from_runnable_config(config)
-    agent_cfg = AgentConfiguration.from_runnable_config(config)
     report = state.get("final_report", "")
 
     result = await invoke_llm(
@@ -322,10 +326,107 @@ async def check_research_sufficiency(state: AgentState, config: RunnableConfig) 
         update["research_retry_count"] = state.get("research_retry_count", 0) + 1
         return Command(goto="prepare_research", update=update)
 
-    if decision == "insufficient" or not _at_least(agent_cfg, OutreachIntent.QUALIFY):
+    if decision == "insufficient":
         return Command(goto="finish_target", update=update)
 
-    return Command(goto="score_target", update=update)
+    # Contacts are wanted at every depth, including research-only: "find me who to talk to
+    # at these colleges" is a research request, and gating contact finding behind the
+    # qualify intent would skip it for exactly the runs that exist to produce contacts.
+    # The intent gate is applied after the card is built, in find_target_contacts.
+    return Command(goto="find_target_contacts", update=update)
+
+
+def _render_contact_card(card: ContactCard) -> str:
+    """Render a contact card as markdown for the saved report.
+
+    Every line carries the URL the detail was read from, so a human can check any of them
+    in one click - which is the only way to tell a real address from a plausible one.
+    """
+    lines = [f"# Contact Card: {card.organization}", ""]
+    lines.append(f"**Best route:** `{card.best_route}`" + (f" - {card.best_route_value}" if card.best_route_value else ""))
+    if card.best_route_reason:
+        lines.append(f"_{card.best_route_reason}_")
+
+    if card.people:
+        lines += ["", "## Named people"]
+        for p in card.people:
+            li = f" - [LinkedIn]({p.linkedin_url})" if p.linkedin_url else ""
+            lines.append(f"- **{p.name}**{f' - {p.role}' if p.role else ''}{li} - found at: {p.source_url}")
+
+    for heading, points in (
+        ("Emails", card.emails), ("Phones", card.phones), ("LinkedIn", card.linkedin_urls)
+    ):
+        if points:
+            lines += ["", f"## {heading}"]
+            for pt in points:
+                who = f" ({pt.belongs_to})" if pt.belongs_to else ""
+                lines.append(f"- `{pt.value}` [{pt.kind}]{who} - found at: {pt.source_url}")
+
+    if card.contact_page:
+        lines += ["", f"**Contact page:** {card.contact_page}"]
+    if card.postal_address:
+        lines += ["", f"**Postal address:** {card.postal_address}"]
+
+    lines += ["", "## Sources checked", ""]
+    lines += [f"- {s}" for s in card.sources_checked] or ["- (none recorded)"]
+    return "\n".join(lines)
+
+
+async def find_target_contacts(state: AgentState, config: RunnableConfig) -> Command[Literal["score_target", "finish_target"]]:
+    """Run the contact agent and record every route it evidenced.
+
+    Runs unconditionally rather than at the research agent's discretion. Contact finding
+    used to be an instruction in the research supervisor's prompt ("this is not optional"),
+    and the supervisor skipped it silently: of 64 targets researched that way, 3 came back
+    with an email and 1 with a phone number. Discretion over *effort* lives inside the
+    contact agent's planner; whether it runs at all is not up for negotiation.
+
+    Never fails the target. An unreachable target is still worth its research, and the
+    thinness of a result is recorded on the card rather than raised.
+
+    Args:
+        state: Current state holding the target and its entity type
+        config: Runtime configuration with the effort cap and evidence floor
+
+    Returns:
+        Command to scoring, carrying the contact card
+    """
+    research_cfg = Configuration.from_runnable_config(config)
+    agent_cfg = AgentConfiguration.from_runnable_config(config)
+    target: Target = state["current_target"]
+    onward = "score_target" if _at_least(agent_cfg, OutreachIntent.QUALIFY) else "finish_target"
+
+    result = await contact_agent.ainvoke(
+        {
+            "target_name": target.name,
+            "target_website": target.website or "",
+            "target_context": target.context or "",
+            "entity_type": state.get("entity_type") or "",
+        },
+        config=config,
+    )
+    card: ContactCard | None = result.get("contact_card")
+
+    if card is None:
+        logging.warning(f"{target.name}: contact agent returned no card")
+        return Command(goto=onward, update={"contact_card": None})
+
+    # "Nothing found" is only credible once the sources were actually tried. Distinguishing
+    # a genuine dead end from an early exit is the whole reason sources_checked exists -
+    # without it, a two-call give-up and an eight-call exhaustive search look identical.
+    if card.is_empty() and len(card.sources_checked) < research_cfg.min_contact_sources_checked:
+        logging.warning(
+            f"{target.name}: contact agent found nothing after only "
+            f"{len(card.sources_checked)} source(s) - treating as an early exit, not a dead end"
+        )
+
+    return Command(
+        goto=onward,
+        update={
+            "contact_card": card,
+            "reports": [Report(title=CONTACT_CARD_TITLE, content=_render_contact_card(card), is_markdown=True)],
+        },
+    )
 
 
 async def score_target(state: AgentState, config: RunnableConfig) -> Command[Literal["generate_materials", "finish_target"]]:
@@ -391,6 +492,56 @@ async def score_target(state: AgentState, config: RunnableConfig) -> Command[Lit
     return Command(goto="generate_materials", update=update)
 
 
+def _route_from_card(card: ContactCard) -> ContactRoute:
+    """Read the outreach route off an evidenced contact card.
+
+    Everything here was copied from a page the contact agent actually fetched, so nothing
+    in the resulting route can be a name-pattern guess.
+    """
+    person = card.people[0] if card.people else None
+    written = card.best_route in ("direct_email", "role_inbox_attn")
+    email = card.best_route_value if written else (card.emails[0].value if card.emails else "")
+    linked = card.best_route in ("linkedin_dm", "contact_form", "phone", "postal")
+    return ContactRoute(
+        recipient_name=person.name if person else "",
+        recipient_role=person.role if person else "",
+        email=email,
+        route_type=card.best_route,
+        route_url=card.best_route_value if linked else (card.contact_page or ""),
+    )
+
+
+# What to write, per channel. A LinkedIn connection note and a covering email to a role
+# inbox are different pieces of craft, and writing one when the route needs the other is
+# how a good draft still fails to reach anyone.
+_CHANNEL_GUIDANCE: dict[str, str] = {
+    "direct_email": "Channel: direct email to the named person. Write a normal outreach email.",
+    "role_inbox_attn": (
+        "Channel: a role inbox, not a personal one. A gatekeeper reads this first and "
+        "forwards it, so open by naming who it is for and why it belongs with them, and "
+        "put 'Attn: <name>, <title>' at the front of the subject line."
+    ),
+    "linkedin_dm": (
+        "Channel: a LinkedIn connection note. Hard limit 300 characters - no subject "
+        "line, no signature, no links. One specific reason for reaching out and one ask."
+    ),
+    "phone": (
+        "Channel: a phone call. Write talking points, not an email: the opening line, "
+        "the single reason this is worth their time, and the ask."
+    ),
+    "contact_form": "Channel: a website contact form. Keep it short and self-contained - assume no attachments and no formatting.",
+    "postal": "Channel: a physical letter. Formal register, full postal salutation, and no links the reader cannot type.",
+}
+
+
+def _channel_guidance(route: ContactRoute) -> str:
+    """Tell the writer which channel it is writing for."""
+    return _CHANNEL_GUIDANCE.get(
+        route.route_type,
+        "Channel: email. No route was evidenced, so keep claims general and verifiable.",
+    )
+
+
 async def generate_materials(state: AgentState, config: RunnableConfig) -> Command[Literal["approve_send", "finish_target"]]:
     """Write the outreach report and email, and create a Gmail draft.
 
@@ -422,15 +573,20 @@ async def generate_materials(state: AgentState, config: RunnableConfig) -> Comma
         config=config,
     )
 
-    # Pick who to address before writing, so the email is pitched at a real person's role
-    # rather than opening "Hello team" while the research names a CIO.
-    route = await invoke_llm(
-        system_prompt=SELECT_CONTACT_ROUTE_PROMPT,
-        user_message=report,
-        model_name=sales_cfg.email_model,
-        config=config,
-        response_format=ContactRoute,
-    )
+    # Who to address, and how. The contact agent already decided this from evidence, so
+    # prefer its card; the LLM read of the report is only a fallback for callers that
+    # skipped contact finding.
+    card: ContactCard | None = state.get("contact_card")
+    if card is not None:
+        route = _route_from_card(card)
+    else:
+        route = await invoke_llm(
+            system_prompt=SELECT_CONTACT_ROUTE_PROMPT,
+            user_message=report,
+            model_name=sales_cfg.email_model,
+            config=config,
+            response_format=ContactRoute,
+        )
     logging.info(
         f"{target.name}: route={route.route_type} "
         f"recipient={route.recipient_name or '(none named)'} {route.recipient_role}"
@@ -443,6 +599,7 @@ async def generate_materials(state: AgentState, config: RunnableConfig) -> Comma
         brief.append(f"Opening angle to use: {state['lead_angle']}")
     if route.recipient_name:
         brief.append(f"Address this person: {route.recipient_name} ({route.recipient_role})")
+    brief.append(_channel_guidance(route))
     guidance = "\n\n".join(brief)
 
     email = await invoke_llm(
@@ -662,6 +819,7 @@ def build_unified_agent(research_node=deep_researcher, checkpointer=None):
     builder.add_node("prepare_research", _isolated(prepare_research))
     builder.add_node("research", research_node)                           # Nested research subgraph
     builder.add_node("check_research_sufficiency", _isolated(check_research_sufficiency))
+    builder.add_node("find_target_contacts", _isolated(find_target_contacts))  # Contact-finding subgraph
     builder.add_node("score_target", _isolated(score_target))
     builder.add_node("generate_materials", _isolated(generate_materials))
     builder.add_node("approve_send", _isolated(approve_send))             # Human-in-the-loop gate

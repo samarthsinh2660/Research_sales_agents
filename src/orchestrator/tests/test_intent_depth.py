@@ -4,10 +4,19 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from agents.research.state import ContactCard, ContactPoint
 from orchestrator.graph import build_unified_agent
 from orchestrator.state import Target
 
 CACHED_REPORT = "Acme Corp is an IT services firm founded in 2004, serving manufacturing clients."
+
+CACHED_CARD = ContactCard(
+    organization="Acme Corp",
+    emails=[ContactPoint(value="asha@acme.test", kind="personal", source_url="https://acme.test/team")],
+    best_route="direct_email",
+    best_route_value="asha@acme.test",
+    sources_checked=["official website crawl", "targeted search", "MCA filing"],
+)
 
 
 async def _fake_research(state, config=None):
@@ -53,7 +62,11 @@ def _run(intent):
     graph = build_unified_agent(research_node=_fake_research)
     target = Target(name="Acme Corp", source="inline", email="hi@acme.test")
 
+    fake_contact_agent = AsyncMock()
+    fake_contact_agent.ainvoke = AsyncMock(return_value={"contact_card": CACHED_CARD})
+
     with patch("orchestrator.graph.invoke_llm", side_effect=fake_invoke_llm), \
+         patch("orchestrator.graph.contact_agent", fake_contact_agent), \
          patch("orchestrator.graph.GmailTools", _Gmail), \
          patch("orchestrator.graph.save_reports_locally"), \
          patch("orchestrator.graph.resolve_targets", new=AsyncMock(return_value=[target])):

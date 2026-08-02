@@ -1602,6 +1602,19 @@ def get_fallback_model_config(configurable, config: RunnableConfig, max_tokens: 
         "tags": ["langsmith:nostream"]
     }
 
+def get_contact_tools() -> list:
+    """Build the contact agent's toolkit.
+
+    Three tools, and deliberately no think_tool: reflection rounds are what turn a lookup
+    into a research session, and the contact agent is capped precisely so it stays cheap
+    enough to run on every target.
+    """
+    tools = [website_contact_finder, tavily_search]
+    # Only offered once a scraping account exists, otherwise it is a guaranteed failure.
+    if os.getenv("LINKEDIN_EMAIL") and os.getenv("LINKEDIN_PASSWORD"):
+        tools.append(linkedin_search)
+    return tools
+
 def get_tavily_api_key(config: RunnableConfig):
     """Get Tavily API key from environment or config."""
     should_get_from_config = os.getenv("GET_API_KEYS_FROM_CONFIG", "false")
