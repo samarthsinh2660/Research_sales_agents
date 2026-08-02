@@ -1,5 +1,5 @@
 """Unit tests for filter_by_relevance - pure filtering logic, no API calls."""
-from open_deep_research.utils import filter_by_relevance
+from agents.research.utils import filter_by_relevance
 
 
 def test_filters_below_threshold():

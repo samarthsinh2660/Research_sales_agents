@@ -19,7 +19,7 @@ Copied from the existing codebase conventions — every task must follow all of 
 - Config is read as the first statement of a node: `configurable = AgentConfiguration.from_runnable_config(config)`.
 - `logging.info/warning/debug` with f-strings. **No `print()`, no colorama.**
 - Google-style docstrings with `Args:`/`Returns:` and a rationale paragraph explaining *why* the node exists where it does.
-- Absolute imports only (`from agent.x import y`). `##########################` (26 hashes) section fences in utils modules, `###################` (19) in state modules.
+- Absolute imports only (`from orchestrator.x import y`). `##########################` (26 hashes) section fences in utils modules, `###################` (19) in state modules.
 - Pydantic config fields use `Field(default=..., metadata={"x_oap_ui_config": {...}})` so they render in Studio.
 - New config field names must not collide with `Configuration` or `SalesConfiguration` field names — `from_runnable_config` resolves every field from `os.environ[FIELD.upper()]`, so a shared name means a shared env var.
 - Verify command: `python -m pytest tests/unit/ src/sales_outreach/tests/ src/agent/tests/ -q`
@@ -69,7 +69,7 @@ src/agent/
 ```python
 # src/agent/tests/test_configuration.py
 """Unit tests for AgentConfiguration - no API calls."""
-from agent.configuration import INTENT_DEPTH, AgentConfiguration, OutreachIntent
+from orchestrator.configuration import INTENT_DEPTH, AgentConfiguration, OutreachIntent
 
 
 def test_default_intent_is_research():
@@ -94,8 +94,8 @@ def test_intent_depth_ordering():
 
 
 def test_no_env_var_collision_with_other_configs():
-    from open_deep_research.configuration import Configuration
-    from sales_outreach.configuration import SalesConfiguration
+    from agents.research.configuration import Configuration
+    from agents.outreach.configuration import SalesConfiguration
     mine = set(AgentConfiguration.model_fields)
     assert not (mine & set(Configuration.model_fields))
     assert not (mine & set(SalesConfiguration.model_fields))
@@ -243,7 +243,7 @@ git commit -m "feat(agent): add orchestrator package with intent configuration"
 ```python
 # src/agent/tests/test_per_target_reset.py
 """Guards that per-target state is fully reset between targets."""
-from agent.state import PER_TARGET_FIELDS, AgentState, Target, replace_reducer
+from orchestrator.state import PER_TARGET_FIELDS, AgentState, Target, replace_reducer
 
 # Fields that legitimately persist across the loop rather than being reset.
 CROSS_TARGET_FIELDS = {
@@ -282,7 +282,7 @@ from langchain_core.messages import MessageLikeRepresentation
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from sales_outreach.state import Report, override_reducer
+from agents.outreach.state import Report, override_reducer
 
 
 ###################
@@ -385,7 +385,7 @@ git commit -m "feat(agent): add Target model and orchestrator state"
 """Unit tests for target resolution - no network for the pure helpers."""
 import pytest
 
-from agent.targets import extract_sheet_id, parse_inline_list
+from orchestrator.targets import extract_sheet_id, parse_inline_list
 
 
 def test_extract_sheet_id_from_full_url():
@@ -430,8 +430,8 @@ from typing import List, Optional
 
 from langchain_core.runnables import RunnableConfig
 
-from agent.configuration import AgentConfiguration
-from agent.state import Target
+from orchestrator.configuration import AgentConfiguration
+from orchestrator.state import Target
 
 ##########################
 # Input Parsing Utils
@@ -499,7 +499,7 @@ async def resolve_targets(prompt: str, config: RunnableConfig) -> List[Target]:
 
 def _targets_from_sheet(sheet_id: str, config: RunnableConfig) -> List[Target]:
     """Load targets from a Google Sheet, preserving the row id for CRM write-back."""
-    from sales_outreach.utils import get_lead_loader
+    from agents.outreach.utils import get_lead_loader
 
     merged = {**config, "configurable": {**config.get("configurable", {}), "sheet_id": sheet_id}}
     records = get_lead_loader(merged).fetch_records()
@@ -580,7 +580,7 @@ ashish.kumar3@timesinternet.in
 # append to src/agent/tests/test_targets.py
 import pathlib
 
-from agent.targets import parse_listing_content
+from orchestrator.targets import parse_listing_content
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "listing_page.txt"
 
@@ -742,7 +742,7 @@ git commit -m "feat(agent): extract targets from listing pages with search fallb
 ```python
 # src/agent/tests/test_graph_shape.py
 """Structural tests for the unified graph - no API calls, no credentials."""
-from agent.graph import unified_agent
+from orchestrator.graph import unified_agent
 
 EDGES = {(e.source, e.target) for e in unified_agent.get_graph().edges}
 NODES = set(unified_agent.get_graph().nodes)
@@ -793,7 +793,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'agent.graph'`
 
 One entry point: the prompt names the subject, config names how deep to go. Research is
 nested as a native subgraph so its internals stay visible in traces and Studio, and the
-sales work is reused from sales_outreach rather than reimplemented.
+sales work is reused from agents.outreach rather than reimplemented.
 """
 
 import logging
@@ -803,22 +803,22 @@ from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
-from open_deep_research.deep_researcher import deep_researcher
+from agents.research.deep_researcher import deep_researcher
 
-from agent.configuration import INTENT_DEPTH, AgentConfiguration, OutreachIntent
-from agent.state import AgentInputState, AgentState, Target
-from agent.targets import resolve_targets
-from sales_outreach.configuration import SalesConfiguration
-from sales_outreach.prompts import (
+from orchestrator.configuration import INTENT_DEPTH, AgentConfiguration, OutreachIntent
+from orchestrator.state import AgentInputState, AgentState, Target
+from orchestrator.targets import resolve_targets
+from agents.outreach.configuration import SalesConfiguration
+from agents.outreach.prompts import (
     CHECK_RESEARCH_SUFFICIENCY_PROMPT,
     GENERATE_OUTREACH_REPORT_PROMPT,
     PERSONALIZE_EMAIL_PROMPT,
     PROOF_READER_PROMPT,
     SCORE_LEAD_PROMPT,
 )
-from sales_outreach.state import EmailResponse, Report, ResearchSufficiency
-from sales_outreach.tools.base.gmail_tools import GmailTools
-from sales_outreach.utils import (
+from agents.outreach.state import EmailResponse, Report, ResearchSufficiency
+from agents.outreach.tools.base.gmail_tools import GmailTools
+from agents.outreach.utils import (
     invoke_llm,
     qualification_decision,
     research_sufficiency_decision,
@@ -1067,7 +1067,7 @@ async def approve_send(state: AgentState, config: RunnableConfig) -> Command[Lit
     Returns:
         Command to send, or to skip sending for this target
     """
-    from sales_outreach.utils import get_report
+    from agents.outreach.utils import get_report
 
     agent_cfg = AgentConfiguration.from_runnable_config(config)
     target: Target = state["current_target"]
@@ -1099,7 +1099,7 @@ async def send_email(state: AgentState, config: RunnableConfig) -> Command[Liter
     Returns:
         Command to finish this target
     """
-    from sales_outreach.utils import get_report
+    from agents.outreach.utils import get_report
 
     target: Target = state["current_target"]
     body = get_report(state.get("reports", []), "Personalized Email")
@@ -1125,7 +1125,7 @@ async def finish_target(state: AgentState, config: RunnableConfig) -> Command[Li
     Returns:
         Command back to the loop head
     """
-    from sales_outreach.utils import get_current_date, get_lead_loader
+    from agents.outreach.utils import get_current_date, get_lead_loader
 
     target: Target = state["current_target"]
     reports = state.get("reports", [])
@@ -1231,7 +1231,7 @@ git commit -m "feat(agent): add unified graph with intent gates and nested resea
 import asyncio
 from unittest.mock import patch
 
-from agent.graph import finish_target
+from orchestrator.graph import finish_target
 
 
 def _run_finish_target(source="inline", crm_row_id=None):
@@ -1306,7 +1306,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent.graph import unified_agent
+from orchestrator.graph import unified_agent
 
 CACHED_REPORT = "Acme Corp is an IT services firm founded in 2004, serving manufacturing clients."
 

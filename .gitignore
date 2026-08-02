@@ -39,7 +39,7 @@ token.json
 .linkedin_session.json
 
 # Generated outreach output (real prospect research and drafted emails)
-src/sales_outreach/reports/
+src/agents/outreach/reports/
 
 # IDE specific files
 .idea/
@@ -78,3 +78,4 @@ tmp/
 temp/
 
 .langgraph_api
+.batch_cache/

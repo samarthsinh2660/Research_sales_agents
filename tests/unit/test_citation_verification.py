@@ -1,7 +1,7 @@
 """Unit tests for verify_citations - pure text processing, no API calls."""
 import logging
 
-from open_deep_research.utils import verify_citations
+from agents.research.utils import verify_citations
 
 
 def test_keeps_citation_with_matching_url():

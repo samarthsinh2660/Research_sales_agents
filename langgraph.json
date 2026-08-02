@@ -1,16 +1,16 @@
 {
     "dockerfile_lines": [],
     "graphs": {
-      "Unified Agent": "./src/agent/graph.py:unified_agent",
-      "Deep Researcher": "./src/open_deep_research/deep_researcher.py:deep_researcher",
-      "Sales Outreach": "./src/sales_outreach/outreach_automation.py:outreach_automation"
+        "Unified Agent": "./src/orchestrator/graph.py:unified_agent",
+        "Deep Researcher": "./src/agents/research/deep_researcher.py:deep_researcher",
+        "Sales Outreach": "./src/agents/outreach/outreach_automation.py:outreach_automation"
     },
     "python_version": "3.11",
     "env": "./.env",
     "dependencies": [
-      "."
+        "."
     ],
     "auth": {
-      "path": "./src/security/auth.py:auth"
+        "path": "./src/security/auth.py:auth"
     }
 }

@@ -1,5 +1,5 @@
 """Unit tests for extract_answer_text - handles Gemini's thinking-mode content shape."""
-from open_deep_research.utils import extract_answer_text
+from agents.research.utils import extract_answer_text
 
 
 def test_plain_string_passthrough():
