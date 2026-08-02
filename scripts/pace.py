@@ -344,8 +344,11 @@ async def cmd_run(args, targets: list[Target] | None = None) -> None:
     config = build_config(args)
 
     if targets is None:
-        if args.target.startswith("http"):
-            targets = await targets_for_url(args.target, config, "")
+        # A URL anywhere in the line wins: "find the people from <url>" names the page to
+        # use, and treating the sentence as a list of names would invent targets from words.
+        url = url_in(args.target)
+        if url:
+            targets = await targets_for_url(url, config, "")
         else:
             targets = [Target(name=n, source="inline") for n in parse_inline_list(args.target)]
 
@@ -660,14 +663,27 @@ _DISCOVERY_VERB = re.compile(r"^\s*(find|search|discover|list|get|show)\b", re.I
 _LOCATION_HINT = re.compile(r"\b(in|near|around|across|from|at)\b\s+\w", re.IGNORECASE)
 
 
+_URL_ANYWHERE = re.compile(r"https?://\S+")
+
+
+def url_in(line: str) -> str | None:
+    """Return the first URL mentioned anywhere in the line, if there is one."""
+    match = _URL_ANYWHERE.search(line or "")
+    return match.group(0) if match else None
+
+
 def looks_like_discovery(line: str) -> bool:
     """Whether a plain-text line is asking to find organizations, not naming them.
+
+    A line naming a URL is never discovery, wherever the URL sits. "find the people from
+    <url>" means use that page, and routing it to a search because of the leading verb
+    would quietly answer a different question than the one asked.
 
     Deliberately does not require a location: "find all the colleges we can sell PACE to"
     is plainly a search, and refusing it because it lacks "in Dehradun" would send it down
     the name-parsing path and produce nonsense targets. The location is asked for instead.
     """
-    if line.startswith("http") or not _DISCOVERY_VERB.match(line):
+    if url_in(line) or not _DISCOVERY_VERB.match(line):
         return False
     return len(line.split()) >= 3
 

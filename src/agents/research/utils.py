@@ -289,23 +289,25 @@ async def website_contact_finder(
         logging.warning(f"Crawl failed for {website_url}, falling back to page source: {e}")
 
     results = crawl_result.get("results", [])
-    published = await _emails_in_page_source(website_url)
+    published, phones = await _contacts_in_page_source(website_url)
 
-    if not results and not published:
+    if not results and not published and not phones:
         return f"No contact-relevant pages found by crawling {website_url}."
 
     configurable = Configuration.from_runnable_config(config)
     max_char_to_include = configurable.max_content_length
 
     formatted_output = f"Crawled pages from {website_url}:\n\n"
-    if published:
-        # Listed first, and separately, because the crawl demonstrably loses addresses that
+    if published or phones:
+        # Listed first, and separately, because the crawl demonstrably loses contacts that
         # are present in the raw page: on one site it returned ~6k characters and none of
         # them were the address sitting in the homepage source.
         formatted_output += (
-            "--- ADDRESSES READ DIRECTLY FROM THE PAGE SOURCE ---\n"
+            "--- CONTACTS READ DIRECTLY FROM THE PAGE SOURCE ---\n"
             "Published verbatim on the site, safe to quote exactly:\n"
-            + "\n".join(f"- {e}" for e in published)
+            + "\n".join(f"- email: {e}" for e in published)
+            + ("\n" if published and phones else "")
+            + "\n".join(f"- phone: {p}" for p in phones)
             + "\n\n" + "-" * 80 + "\n"
         )
     for i, result in enumerate(results):
@@ -326,12 +328,21 @@ _EMAIL_REJECT = re.compile(
 )
 
 
-async def _emails_in_page_source(url: str) -> list[str]:
-    """Read published addresses straight out of a page's HTML. No model, no crawler.
+# Phone numbers are taken from tel: links only. Digits scraped out of body text pick up
+# dates, prices and registration numbers; a tel: link is the site declaring "this is a
+# number to call", which is the same standard the email extraction holds to.
+_TEL_LINK = re.compile(r'tel:([+0-9][0-9()\s.\-]{7,24})', re.IGNORECASE)
+
+
+async def _contacts_in_page_source(url: str) -> tuple[list[str], list[str]]:
+    """Read published emails and phone numbers straight out of a page's HTML.
 
     Complements the crawl rather than replacing it: the crawler is better at finding which
-    pages matter, but its extracted text drops addresses that sit in markup. Parsing can
-    only copy an address or miss it, never invent one, so this adds no fabrication risk.
+    pages matter, but its extracted text drops contacts that sit in markup. Parsing can
+    only copy a contact or miss it, never invent one, so this adds no fabrication risk.
+
+    Returns:
+        (emails, phone numbers), either of which may be empty
     """
     try:
         async with httpx.AsyncClient(
@@ -343,16 +354,31 @@ async def _emails_in_page_source(url: str) -> list[str]:
             html = response.text
     except Exception as e:
         logging.debug(f"Could not read page source for {url}: {e}")
-        return []
+        return [], []
 
-    found: dict[str, None] = {}
+    emails: dict[str, None] = {}
     for raw in _EMAIL_IN_SOURCE.findall(html):
         email = raw.strip().strip(".,;:").lower()
         if not _EMAIL_REJECT.search(email):
-            found.setdefault(email, None)
-    if found:
-        logging.info(f"Page source for {url} published {len(found)} address(es)")
-    return list(found)
+            emails.setdefault(email, None)
+
+    phones: dict[str, None] = {}
+    for raw in _TEL_LINK.findall(html):
+        phone = " ".join(raw.split())
+        if sum(c.isdigit() for c in phone) >= 8:
+            phones.setdefault(phone, None)
+
+    if emails or phones:
+        logging.info(
+            f"Page source for {url} published {len(emails)} address(es), {len(phones)} phone(s)"
+        )
+    return list(emails), list(phones)
+
+
+async def _emails_in_page_source(url: str) -> list[str]:
+    """Published email addresses on a page. Thin wrapper kept for existing callers."""
+    emails, _ = await _contacts_in_page_source(url)
+    return emails
 
 ##########################
 # LinkedIn Search Tool Utils
