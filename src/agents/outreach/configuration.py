@@ -183,12 +183,19 @@ class SalesConfiguration(BaseModel):
         }
     )
     sales_fallback_model: str = Field(
-        default="google_genai:gemma-4-31b-it",
+        default=(
+            "google_genai:gemini-3.1-flash-lite,"
+            "google_genai:gemini-2.5-flash-lite,"
+            "google_genai:gemini-3.6-flash,"
+            "google_genai:gemini-2.0-flash,"
+            "google_genai:gemma-4-31b-it,"
+            "google_genai:gemma-4-26b-a4b-it"
+        ),
         metadata={
             "x_oap_ui_config": {
                 "type": "text",
-                "default": "google_genai:gemini-3.5-flash-lite",
-                "description": "Free backup model used when a configured sales model is rate-limited or unavailable"
+                "default": "google_genai:gemini-3.1-flash-lite,google_genai:gemini-2.5-flash-lite,google_genai:gemini-3.6-flash,google_genai:gemini-2.0-flash,google_genai:gemma-4-31b-it,google_genai:gemma-4-26b-a4b-it",
+                "description": "Comma-separated backup models, tried in order when a configured sales model is rate-limited or unavailable. A list rather than one name because the free-tier request limit is charged per model: retrying an exhausted model always fails, while the next one down is a fresh quota bucket. Set a single name to go back to one fallback."
             }
         }
     )

@@ -46,16 +46,16 @@ from agents.research.state import (
 )
 from agents.research.utils import (
     anthropic_websearch_called,
+    extract_answer_text,
     get_all_tools,
     get_api_key_for_model,
-    get_fallback_model_config,
+    get_fallback_configs,
     get_model_token_limit,
     get_notes_from_tool_calls,
     get_today_str,
     is_token_limit_exceeded,
     openai_websearch_called,
     remove_up_to_last_ai_message,
-    extract_answer_text,
     think_tool,
     verify_citations,
 )
@@ -115,7 +115,8 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
         .with_structured_output(ClarifyWithUser)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(model_config)
-        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).with_structured_output(ClarifyWithUser)])
+        .with_fallbacks([fallback_model.with_config(cfg).with_structured_output(ClarifyWithUser)
+                          for cfg in get_fallback_configs(configurable, config, configurable.research_model_max_tokens)])
     )
     
     # Step 3: Analyze whether clarification is needed
@@ -168,7 +169,8 @@ async def classify_entity_type(state: AgentState, config: RunnableConfig) -> Com
         .with_structured_output(EntityClassification)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
-        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).with_structured_output(EntityClassification)])
+        .with_fallbacks([fallback_model.with_config(cfg).with_structured_output(EntityClassification)
+                          for cfg in get_fallback_configs(configurable, config, configurable.research_model_max_tokens)])
     )
 
     prompt_content = classify_entity_type_prompt.format(
@@ -242,7 +244,8 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         .with_structured_output(ResearchQuestion)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
-        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).with_structured_output(ResearchQuestion)])
+        .with_fallbacks([fallback_model.with_config(cfg).with_structured_output(ResearchQuestion)
+                          for cfg in get_fallback_configs(configurable, config, configurable.research_model_max_tokens)])
     )
     
     # Step 2: Generate structured research brief from user messages
@@ -302,7 +305,8 @@ async def decompose_subtopics(state: AgentState, config: RunnableConfig) -> Comm
         .with_structured_output(Subtopics)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
-        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).with_structured_output(Subtopics)])
+        .with_fallbacks([fallback_model.with_config(cfg).with_structured_output(Subtopics)
+                          for cfg in get_fallback_configs(configurable, config, configurable.research_model_max_tokens)])
     )
 
     # Step 2: Generate subtopics from the research brief
@@ -356,7 +360,8 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
         .bind_tools(lead_researcher_tools)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
-        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).bind_tools(lead_researcher_tools)])
+        .with_fallbacks([fallback_model.with_config(cfg).bind_tools(lead_researcher_tools)
+                          for cfg in get_fallback_configs(configurable, config, configurable.research_model_max_tokens)])
     )
     
     # Step 2: Generate supervisor response based on current context
@@ -558,7 +563,8 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
         .bind_tools(tools)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
-        .with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.research_model_max_tokens)).bind_tools(tools)])
+        .with_fallbacks([fallback_model.with_config(cfg).bind_tools(tools)
+                          for cfg in get_fallback_configs(configurable, config, configurable.research_model_max_tokens)])
     )
     
     # Step 3: Generate researcher response with system context
@@ -680,7 +686,8 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
         "max_tokens": configurable.compression_model_max_tokens,
         "api_key": get_api_key_for_model(configurable.compression_model, config),
         "tags": ["langsmith:nostream"]
-    }).with_fallbacks([fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.compression_model_max_tokens))])
+    }).with_fallbacks([fallback_model.with_config(cfg)
+                          for cfg in get_fallback_configs(configurable, config, configurable.compression_model_max_tokens)])
     
     # Step 2: Prepare messages for compression
     researcher_messages = state.get("researcher_messages", [])
@@ -799,7 +806,8 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
             
             # Generate the final report
             final_report = await configurable_model.with_config(writer_model_config).with_fallbacks(
-                [fallback_model.with_config(get_fallback_model_config(configurable, config, configurable.final_report_model_max_tokens))]
+                [fallback_model.with_config(cfg)
+                 for cfg in get_fallback_configs(configurable, config, configurable.final_report_model_max_tokens)]
             ).ainvoke([
                 HumanMessage(content=final_report_prompt)
             ])

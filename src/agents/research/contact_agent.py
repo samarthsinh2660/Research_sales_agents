@@ -42,7 +42,7 @@ from agents.research.state import (
 from agents.research.utils import (
     get_api_key_for_model,
     get_contact_tools,
-    get_fallback_model_config,
+    get_fallback_configs,
     get_today_str,
 )
 
@@ -88,9 +88,8 @@ async def plan_contact_search(state: ContactAgentState, config: RunnableConfig) 
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(_model_config(configurable.research_model, config, max_tokens))
         .with_fallbacks([
-            fallback_model
-            .with_config(get_fallback_model_config(configurable, config, max_tokens))
-            .with_structured_output(ContactPlan)
+            fallback_model.with_config(cfg).with_structured_output(ContactPlan)
+            for cfg in get_fallback_configs(configurable, config, max_tokens)
         ])
     )
 
@@ -138,9 +137,8 @@ async def find_contacts(state: ContactAgentState, config: RunnableConfig) -> Com
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(_model_config(configurable.research_model, config, max_tokens))
         .with_fallbacks([
-            fallback_model
-            .with_config(get_fallback_model_config(configurable, config, max_tokens))
-            .bind_tools(tools)
+            fallback_model.with_config(cfg).bind_tools(tools)
+            for cfg in get_fallback_configs(configurable, config, max_tokens)
         ])
     )
 
@@ -234,9 +232,8 @@ async def build_contact_card(state: ContactAgentState, config: RunnableConfig) -
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(_model_config(configurable.research_model, config, max_tokens))
         .with_fallbacks([
-            fallback_model
-            .with_config(get_fallback_model_config(configurable, config, max_tokens))
-            .with_structured_output(ContactCard)
+            fallback_model.with_config(cfg).with_structured_output(ContactCard)
+            for cfg in get_fallback_configs(configurable, config, max_tokens)
         ])
     )
 

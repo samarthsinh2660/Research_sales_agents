@@ -91,17 +91,17 @@ async def tavily_search(
     # max_retries=0: retrying the primary burns the caller's 60s timeout before the
     # fallback is ever reached.
     model_api_key = get_api_key_for_model(configurable.summarization_model, config)
-    fallback_summarization_model = init_chat_model(
-        **get_fallback_model_config(configurable, config, configurable.summarization_model_max_tokens),
-        max_retries=2,
-    ).with_structured_output(Summary)
+    fallback_summarization_models = [
+        init_chat_model(**cfg, max_retries=2).with_structured_output(Summary)
+        for cfg in get_fallback_configs(configurable, config, configurable.summarization_model_max_tokens)
+    ]
     summarization_model = init_chat_model(
         model=configurable.summarization_model,
         max_tokens=configurable.summarization_model_max_tokens,
         api_key=model_api_key,
         tags=["langsmith:nostream"],
         max_retries=0,
-    ).with_structured_output(Summary).with_fallbacks([fallback_summarization_model])
+    ).with_structured_output(Summary).with_fallbacks(fallback_summarization_models)
     
     # Step 4 & 5: Summarize results one at a time (not in parallel) so a single search
     # step (which can have 7-8 results) doesn't burst past Gemini free tier's
@@ -1593,14 +1593,33 @@ def get_api_key_for_model(model_name: str, config: RunnableConfig):
             return os.getenv("GOOGLE_API_KEY")
         return None
 
+def get_fallback_model_names(configurable) -> list[str]:
+    """Split the configured fallback ladder into individual model ids.
+
+    fallback_model holds a comma-separated list rather than one name because the free-tier
+    request limit is charged per model: a second attempt against the same exhausted model
+    is guaranteed to fail, while the next model down is a fresh quota bucket.
+    """
+    return [name.strip() for name in configurable.fallback_model.split(",") if name.strip()]
+## we can have this if we need only one model no loop to the multiple models 
 def get_fallback_model_config(configurable, config: RunnableConfig, max_tokens: int):
-    """Build the .with_config() dict for the fallback model, reusing the primary role's token limit."""
-    return {
-        "model": configurable.fallback_model,
-        "max_tokens": max_tokens,
-        "api_key": get_api_key_for_model(configurable.fallback_model, config),
-        "tags": ["langsmith:nostream"]
-    }
+    """Build the .with_config() dict for the first fallback, reusing the primary role's token limit.
+
+    Single-rung view of the ladder, for call sites that take exactly one fallback.
+    """
+    return get_fallback_configs(configurable, config, max_tokens)[0]
+
+def get_fallback_configs(configurable, config: RunnableConfig, max_tokens: int) -> list[dict]:
+    """Build one .with_config() dict per rung of the fallback ladder, in order."""
+    return [
+        {
+            "model": name,
+            "max_tokens": max_tokens,
+            "api_key": get_api_key_for_model(name, config),
+            "tags": ["langsmith:nostream"]
+        }
+        for name in get_fallback_model_names(configurable)
+    ]
 
 def get_contact_tools() -> list:
     """Build the contact agent's toolkit.

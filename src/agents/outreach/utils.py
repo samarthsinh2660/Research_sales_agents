@@ -13,8 +13,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from agents.research.utils import extract_answer_text, get_api_key_for_model
 from agents.outreach.configuration import LeadLoaderType, SalesConfiguration
+from agents.research.utils import extract_answer_text, get_api_key_for_model
 
 ##########################
 # Google Auth Utils
@@ -143,9 +143,18 @@ def get_sales_model_config(model_name: str, config: RunnableConfig, max_tokens: 
         "tags": ["langsmith:nostream"]
     }
 
-def get_sales_fallback_config(configurable: SalesConfiguration, config: RunnableConfig, max_tokens: int) -> dict[str, Any]:
-    """Build the .with_config() dict for the sales fallback model."""
-    return get_sales_model_config(configurable.sales_fallback_model, config, max_tokens)
+def get_sales_fallback_configs(configurable: SalesConfiguration, config: RunnableConfig, max_tokens: int) -> list[dict[str, Any]]:
+    """Build one .with_config() dict per rung of the sales fallback ladder, in order.
+
+    sales_fallback_model holds a comma-separated list because the free-tier request limit
+    is charged per model: a retry against the exhausted model always fails, while the next
+    one down is a fresh quota bucket. A single name still works and gives one fallback.
+    """
+    return [
+        get_sales_model_config(name.strip(), config, max_tokens)
+        for name in configurable.sales_fallback_model.split(",")
+        if name.strip()
+    ]
 
 async def invoke_llm(
     system_prompt: str,
@@ -173,7 +182,7 @@ async def invoke_llm(
     configurable = SalesConfiguration.from_runnable_config(config)
     max_tokens = configurable.sales_model_max_tokens
     primary_config = get_sales_model_config(model_name, config, max_tokens)
-    fallback_config = get_sales_fallback_config(configurable, config, max_tokens)
+    fallback_configs = get_sales_fallback_configs(configurable, config, max_tokens)
 
     if response_format:
         model = (
@@ -181,13 +190,16 @@ async def invoke_llm(
             .with_structured_output(response_format)
             .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
             .with_config(primary_config)
-            .with_fallbacks([fallback_model.with_config(fallback_config).with_structured_output(response_format)])
+            .with_fallbacks([
+                fallback_model.with_config(cfg).with_structured_output(response_format)
+                for cfg in fallback_configs
+            ])
         )
     else:
         model = (
             configurable_model
             .with_config(primary_config)
-            .with_fallbacks([fallback_model.with_config(fallback_config)])
+            .with_fallbacks([fallback_model.with_config(cfg) for cfg in fallback_configs])
         )
 
     messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
