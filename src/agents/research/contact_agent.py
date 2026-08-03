@@ -13,6 +13,7 @@ template had no field for them. A ContactCard cannot lose a detail for lack of a
 
 import asyncio
 import logging
+import re
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -49,6 +50,32 @@ from agents.research.utils import (
 ###################
 # Model Setup
 ###################
+
+# Reserved and placeholder domains. Real contact pages ship these inside form templates
+# ("you@example.com"), and the card assembler has copied them out as though they were a
+# named person's address - complete with a source URL, which makes a fake look verified.
+# Enforced in code rather than in the prompt because a prompt rule can be ignored.
+_PLACEHOLDER_EMAIL = re.compile(
+    r"@(example|test|sample|domain|yourdomain|yourcompany|email|mail)\.(com|org|net|co)$",
+    re.IGNORECASE,
+)
+
+
+def drop_placeholder_contacts(card: ContactCard) -> list[str]:
+    """Strip placeholder addresses from a card, returning what was removed.
+
+    A bounced email is recoverable; an invented address presented with a citation is the
+    one failure that discredits every other contact on the card.
+    """
+    dropped = [p.value for p in card.emails if _PLACEHOLDER_EMAIL.search(p.value)]
+    if dropped:
+        card.emails = [p for p in card.emails if not _PLACEHOLDER_EMAIL.search(p.value)]
+        if card.best_route_value in dropped:
+            card.best_route = "unreachable" if card.is_empty() else "role_inbox_attn"
+            card.best_route_value = card.emails[0].value if card.emails else ""
+            card.best_route_reason = "best route was a placeholder address and was removed"
+    return dropped
+
 
 def _model_config(model_name: str, config: RunnableConfig, max_tokens: int) -> dict:
     """Build the .with_config() dict for a contact-agent model call."""
@@ -259,6 +286,12 @@ async def build_contact_card(state: ContactAgentState, config: RunnableConfig) -
         )
 
     card.organization = card.organization or state.get("target_name", "")
+    dropped = drop_placeholder_contacts(card)
+    if dropped:
+        logging.warning(
+            f"{state.get('target_name')}: dropped {len(dropped)} placeholder address(es) "
+            f"from the contact card: {dropped}"
+        )
     logging.info(
         f"{state.get('target_name')}: contact card - route={card.best_route} "
         f"emails={len(card.emails)} phones={len(card.phones)} "

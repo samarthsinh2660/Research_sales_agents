@@ -253,6 +253,7 @@ class Configuration(BaseModel):
             "google_genai:gemini-3.1-flash-lite,"
             "google_genai:gemini-2.5-flash-lite,"
             "google_genai:gemini-3.6-flash,"
+            "google_genai:gemini-2.5-flash,"
             "google_genai:gemini-2.0-flash,"
             "google_genai:gemma-4-31b-it,"
             "google_genai:gemma-4-26b-a4b-it"
