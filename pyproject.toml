@@ -54,10 +54,23 @@ requires = ["setuptools>=73.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["open_deep_research", "legacy", "tests"]
+packages = [
+    "agents",
+    "agents.research",
+    "agents.outreach",
+    "agents.outreach.tools",
+    "agents.outreach.tools.base",
+    "agents.outreach.tools.leads_loader",
+    "orchestrator",
+    "legacy",
+    "tests",
+]
 
 [tool.setuptools.package-dir]
-"open_deep_research" = "src/open_deep_research"
+"agents" = "src/agents"
+"agents.research" = "src/agents/research"
+"agents.outreach" = "src/agents/outreach"
+"orchestrator" = "src/orchestrator"
 "legacy" = "src/legacy"
 "tests" = "tests"
 
@@ -84,6 +97,8 @@ lint.ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D", "UP"]
+# Command-line entry points: terminal output is their interface, not a stray debug print.
+"scripts/*" = ["T201", "D103"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

@@ -1,5 +1,5 @@
 """Unit tests for entity_registry.py - pure lookups, no API calls."""
-from open_deep_research.entity_registry import (
+from agents.research.entity_registry import (
     DEFAULT_ENTITY_TYPE,
     ENTITY_REGISTRY,
     get_entity_targets,

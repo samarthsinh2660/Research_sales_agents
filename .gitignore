@@ -38,6 +38,9 @@ token.json
 # LinkedIn scraper session (live authenticated session, same sensitivity as an OAuth token)
 .linkedin_session.json
 
+# Generated outreach output (real prospect research and drafted emails)
+src/agents/outreach/reports/
+
 # IDE specific files
 .idea/
 .vscode/
@@ -75,3 +78,4 @@ tmp/
 temp/
 
 .langgraph_api
+.batch_cache/
